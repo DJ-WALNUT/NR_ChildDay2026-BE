@@ -54,12 +54,9 @@ def add_reservation():
                 return jsonify({"error": f"'{field}' 항목은 필수입니다."}), 400
 
         # 2. 중복 신청 방지 로직 (옵션: 이름+전화번호 조합)
-        # 같은 사람이 여러 번 예약하는 것을 막으려면 아래 주석을 해제하세요.
-        """
         exists = Reservation.query.filter_by(name=data['name'], phone=data['phone']).first()
         if exists:
             return jsonify({"error": "이미 동일한 정보로 등록된 예약이 있습니다."}), 409
-        """
 
         new_res = Reservation(
             name=data['name'].strip(), # 공백 제거
@@ -76,6 +73,18 @@ def add_reservation():
     except Exception as e:
         db.session.rollback() # 오류 시 세션 되돌리기
         return jsonify({"error": "서버 내부 오류가 발생했습니다.", "details": str(e)}), 500
+
+# API: 특정 예약 삭제 (관리자용)
+@app.route('/api/reservations/<int:id>', methods=['DELETE'])
+def delete_reservation(id):
+    try:
+        res = Reservation.query.get_or_404(id)
+        db.session.delete(res)
+        db.session.commit()
+        return jsonify({"message": "삭제되었습니다."}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/reservations/clear', methods=['DELETE'])
 def clear_reservations():
@@ -95,9 +104,13 @@ def get_reservations():
     output = []
     for r in res_list:
         output.append({
-            "id": r.id, "name": r.name, "gender": r.gender,
-            "ageGroup": r.ageGroup, "phone": r.phone,
-            "time": r.time, "status": r.status
+            "id": r.id, 
+            "name": r.name, 
+            "gender": r.gender,
+            "ageGroup": r.ageGroup, 
+            "phone": r.phone,
+            "time": r.time, 
+            "status": r.status or 'normal' # status가 None일 경우 'normal' 반환
         })
     return jsonify(output)
 
@@ -108,6 +121,24 @@ def toggle_noshow(id):
     res.status = 'noshow' if res.status == 'normal' else 'normal'
     db.session.commit()
     return jsonify({"message": "Updated"})
+
+# API: 체험 완료 처리 (관리자용)
+@app.route('/api/reservations/<int:id>/complete', methods=['PATCH'])
+def complete_reservation(id):
+    try:
+        res = Reservation.query.get_or_404(id)
+        # 이미 완료된 상태라면 다시 normal로 돌리거나, 
+        # 그냥 completed로 유지하도록 설정할 수 있습니다. 
+        # 여기서는 'completed'로 변경하도록 작성합니다.
+        res.status = 'completed'
+        db.session.commit()
+        return jsonify({
+            "message": "체험 완료 처리되었습니다.",
+            "status": res.status
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5005)
