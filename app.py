@@ -33,11 +33,38 @@ db = SQLAlchemy(app)
 class Booth(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
-    description = db.Column(db.Text, nullable=True)
+    # --- 신규 추가 컬럼 ---
+    mode = db.Column(db.String(20), default='time')  # 'time' (타임별) 또는 'fcfs' (선착순)
+    # 선착순(fcfs)일 때 사용
+    total_limit = db.Column(db.Integer, default=0) 
+    # 타임별(time)일 때 사용
+    start_hour = db.Column(db.Integer, default=11)   # 운영 시작 시간
+    end_hour = db.Column(db.Integer, default=16)     # 운영 종료 시간
+    slots_per_hour = db.Column(db.Integer, default=3) # 시간당 타임 수 (1이면 11시, 3이면 11시 A,B,C)
+    limit_per_slot = db.Column(db.Integer, default=0) # 타임당 인원 제한
+    # ----------------------
     is_active = db.Column(db.Boolean, default=True)
-    # 부스 삭제 시 관련 예약 데이터도 연쇄 삭제
-    reservations = db.relationship('Reservation', backref='booth', cascade="all, delete-orphan")
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
 
+    # [추가] 이 줄이 있어야 booth.reservations를 호출할 수 있습니다.
+    reservations = db.relationship('Reservation', backref='booth', lazy=True, cascade="all, delete-orphan")
+
+    def to_dict(self):
+        # 인원수 계산 로직 포함
+        res_count = Reservation.query.filter_by(booth_id=self.id).count()
+        return {
+            "id": self.id,
+            "name": self.name,
+            "mode": self.mode,
+            "total_limit": self.total_limit,
+            "start_hour": self.start_hour,
+            "end_hour": self.end_hour,
+            "slots_per_hour": self.slots_per_hour,
+            "limit_per_slot": self.limit_per_slot,
+            "is_active": self.is_active,
+            "count": len(self.reservations) # 수정됨
+        }
+    
 class Reservation(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     booth_id = db.Column(db.Integer, db.ForeignKey('booth.id'), nullable=False)
@@ -45,8 +72,20 @@ class Reservation(db.Model):
     gender = db.Column(db.String(10), nullable=False)
     ageGroup = db.Column(db.String(20), nullable=False)
     phone = db.Column(db.String(20), nullable=False)
-    time = db.Column(db.String(50), nullable=False)
+    time = db.Column(db.String(50), nullable=True, default="선착순 접수")
     status = db.Column(db.String(20), default='normal') # 'normal', 'noshow', 'completed'
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "booth_id": self.booth_id,
+            "name": self.name,
+            "gender": self.gender,
+            "ageGroup": self.ageGroup,
+            "phone": self.phone,
+            "time": self.time,
+            "status": self.status
+        }
 
     # [경쟁 상태 보완] 동일 부스 내 이름+번호 중복 방지 제약 조건
     __table_args__ = (
@@ -58,24 +97,37 @@ with app.app_context():
 
 # --- Booth Management API ---
 
-@app.route('/api/booths', methods=['GET'])
-def get_booths():
-    booths = Booth.query.all()
-    return jsonify([{
-        "id": b.id, 
-        "name": b.name, 
-        "description": b.description, 
-        "is_active": b.is_active,
-        "count": len(b.reservations)
-    } for b in booths])
-
-@app.route('/api/booths', methods=['POST'])
-def add_booth():
-    data = request.json
-    new_booth = Booth(name=data['name'], description=data.get('description', ''))
-    db.session.add(new_booth)
-    db.session.commit()
-    return jsonify({"message": "부스가 생성되었습니다.", "id": new_booth.id}), 201
+@app.route('/api/booths', methods=['GET','POST'])
+def create_booth():
+    if request.method == 'GET':
+        # 부스 목록 조회 로직 추가
+        booths = Booth.query.all()
+        return jsonify([b.to_dict() for b in booths])
+    
+    if request.method == 'POST':
+        data = request.json
+        if not data or not data.get('name'):
+            return jsonify({"error": "부스 이름은 필수입니다."}), 400
+        
+    try:
+        # 프론트에서 보내주는 값 외에 모델에 정의된 신규 컬럼들의 기본값을 확실히 잡아줍니다.
+        new_booth = Booth(
+            name=data.get('name'),
+            mode=data.get('mode', 'time'),
+            # 아래 값들은 프론트엔드 추가 폼에서 보내주기 전까지는 기본값을 할당합니다.
+            total_limit=data.get('total_limit', 0),
+            start_hour=data.get('start_hour', 11),
+            end_hour=data.get('end_hour', 16),
+            slots_per_hour=data.get('slots_per_hour', 3),
+            limit_per_slot=data.get('limit_per_slot', 0)
+        )
+        db.session.add(new_booth)
+        db.session.commit()
+        return jsonify({"message": "부스가 생성되었습니다.", "id": new_booth.id}), 201
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error creating booth: {str(e)}") # 서버 로그 확인용
+        return jsonify({"error": str(e)}), 400
 
 @app.route('/api/booths/<int:id>/toggle', methods=['PATCH'])
 def toggle_booth_active(id):
@@ -83,6 +135,33 @@ def toggle_booth_active(id):
     booth.is_active = not booth.is_active
     db.session.commit()
     return jsonify({"message": "부스 상태 변경", "is_active": booth.is_active})
+
+@app.route('/api/booths/<int:id>', methods=['PUT'])
+def update_booth(id):
+    booth = Booth.query.get_or_404(id)
+    data = request.json
+    
+    try:
+        if 'name' in data:
+            booth.name = data['name']
+        if 'mode' in data:
+            booth.mode = data['mode']
+        if 'total_limit' in data:
+            booth.total_limit = data['total_limit']
+        if 'start_hour' in data:
+            booth.start_hour = data['start_hour']
+        if 'end_hour' in data:
+            booth.end_hour = data['end_hour']
+        if 'slots_per_hour' in data:
+            booth.slots_per_hour = data['slots_per_hour']
+        if 'limit_per_slot' in data:
+            booth.limit_per_slot = data['limit_per_slot']
+            
+        db.session.commit()
+        return jsonify({"message": "부스 정보가 수정되었습니다.", "booth": booth.to_dict()}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 400
 
 @app.route('/api/booths/<int:id>', methods=['DELETE'])
 def delete_booth(id):
@@ -92,39 +171,50 @@ def delete_booth(id):
     return jsonify({"message": "부스가 삭제되었습니다."})
 
 # --- Reservation API (Business Logic) ---
-
 @app.route('/api/reservations', methods=['POST'])
-def add_reservation():
-    try:
-        data = request.json
-        booth_id = data.get('booth_id')
-        
-        # [락 적용] 부스 상태를 확인하는 동안 다른 요청이 개입하지 못하도록 락을 겁니다.
-        booth = Booth.query.with_for_update().get(booth_id)
-        
-        if not booth:
-            return jsonify({"error": "존재하지 않는 부스입니다."}), 404
-        if not booth.is_active:
-            return jsonify({"error": "현재 이 부스는 신청을 받지 않습니다."}), 403
+def create_reservation():
+    data = request.json
+    booth_id = data.get('booth_id')
+    booth = Booth.query.get_or_404(booth_id)
 
-        new_res = Reservation(
-            booth_id=booth_id,
-            name=data['name'].strip(),
-            gender=data['gender'],
-            ageGroup=data['ageGroup'],
-            phone=data['phone'].replace("-", ""),
-            time=data['time']
-        )
-        db.session.add(new_res)
-        db.session.commit()
-        return jsonify({"message": "Success", "id": new_res.id}), 201
+    # 1. 선착순(fcfs) 모드 체크
+    if booth.mode == 'fcfs':
+        current_count = Reservation.query.filter_by(booth_id=booth_id).count()
+        if booth.total_limit > 0 and current_count >= booth.total_limit:
+            return jsonify({"error": "선착순 인원이 마감되었습니다."}), 400
 
-    except IntegrityError:
-        db.session.rollback()
-        return jsonify({"error": "이미 해당 부스에 동일한 정보로 신청된 내역이 있습니다."}), 409
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({"error": str(e)}), 500
+    # 2. 타임별(time) 모드 체크
+    else:
+        selected_time = data.get('time')
+        current_time_count = Reservation.query.filter_by(
+            booth_id=booth_id, 
+            time=selected_time
+        ).count()
+        if booth.limit_per_slot > 0 and current_time_count >= booth.limit_per_slot:
+            return jsonify({"error": f"{selected_time} 타임은 마감되었습니다."}), 400
+
+    # 중복 예약 체크 (이름 + 전화번호 기반)
+    existing = Reservation.query.filter_by(
+        name=data.get('name'),
+        phone=data.get('phone'),
+        booth_id=booth_id
+    ).first()
+    
+    if existing:
+        return jsonify({"error": "이미 해당 부스에 예약된 정보가 있습니다."}), 400
+
+    new_res = Reservation(
+        name=data.get('name'),
+        gender=data.get('gender'),
+        ageGroup=data.get('ageGroup'),
+        phone=data.get('phone'),
+        time=data.get('time', '선착순 접수'), # fcfs일 경우 고정 텍스트
+        booth_id=booth_id
+    )
+    
+    db.session.add(new_res)
+    db.session.commit()
+    return jsonify(new_res.to_dict()), 201
 
 # 부스별 신청자 목록 가져오기 (관리자 대시보드용)
 @app.route('/api/booths/<int:booth_id>/reservations', methods=['GET'])
