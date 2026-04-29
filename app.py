@@ -177,11 +177,27 @@ def create_reservation():
     booth_id = data.get('booth_id')
     booth = Booth.query.get_or_404(booth_id)
 
+    # 중복 예약 체크 (이름 + 전화번호 기반)를 정원 체크보다 먼저 수행합니다.
+    existing = Reservation.query.filter_by(
+        name=data.get('name'),
+        phone=data.get('phone'),
+        booth_id=booth_id
+    ).first()
+    
+    if existing:
+        return jsonify({"error": "이미 해당 부스에 예약된 정보가 있습니다."}), 400
+    
+    # 상태 관리를 위한 변수 초기화
+    reservation_status = 'normal'
+    is_waiting = False
+
     # 1. 선착순(fcfs) 모드 체크
     if booth.mode == 'fcfs':
+        # 기존 쿼리에서는 'noshow' 등을 제외하지 않고 전체 카운트를 셌으므로 로직 유지
         current_count = Reservation.query.filter_by(booth_id=booth_id).count()
         if booth.total_limit > 0 and current_count >= booth.total_limit:
-            return jsonify({"error": "선착순 인원이 마감되었습니다."}), 400
+            reservation_status = 'waiting'  # 마감 시 대기자 상태로 변경
+            is_waiting = True
 
     # 2. 타임별(time) 모드 체크
     else:
@@ -191,30 +207,27 @@ def create_reservation():
             time=selected_time
         ).count()
         if booth.limit_per_slot > 0 and current_time_count >= booth.limit_per_slot:
-            return jsonify({"error": f"{selected_time} 타임은 마감되었습니다."}), 400
-
-    # 중복 예약 체크 (이름 + 전화번호 기반)
-    existing = Reservation.query.filter_by(
-        name=data.get('name'),
-        phone=data.get('phone'),
-        booth_id=booth_id
-    ).first()
-    
-    if existing:
-        return jsonify({"error": "이미 해당 부스에 예약된 정보가 있습니다."}), 400
+            reservation_status = 'waiting'  # 마감 시 대기자 상태로 변경
+            is_waiting = True
 
     new_res = Reservation(
         name=data.get('name'),
         gender=data.get('gender'),
         ageGroup=data.get('ageGroup'),
         phone=data.get('phone'),
-        time=data.get('time', '선착순 접수'), # fcfs일 경우 고정 텍스트
-        booth_id=booth_id
+        time=data.get('time', '선착순 접수'), 
+        booth_id=booth_id,
+        status=reservation_status # 'normal' 또는 'waiting'이 저장됨
     )
     
     db.session.add(new_res)
     db.session.commit()
-    return jsonify(new_res.to_dict()), 201
+    
+    # 프론트엔드에서 대기자 여부를 판단할 수 있도록 응답에 is_waiting 플래그 추가
+    response_data = new_res.to_dict()
+    response_data['is_waiting'] = is_waiting
+    
+    return jsonify(response_data), 201
 
 # 부스별 신청자 목록 가져오기 (관리자 대시보드용)
 @app.route('/api/booths/<int:booth_id>/reservations', methods=['GET'])
