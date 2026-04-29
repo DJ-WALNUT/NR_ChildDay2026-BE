@@ -10,6 +10,7 @@ app = Flask(__name__)
 allowed_origins = [
     "http://localhost:5173",
     "https://2026child.team-cluster.kr",
+    "https://nrbooth.team-cluster.kr",
     "https://child-api.team-cluster.kr"
 ]
 CORS(app, 
