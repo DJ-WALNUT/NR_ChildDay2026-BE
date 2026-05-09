@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text
 import os
 
 app = Flask(__name__)
@@ -34,16 +35,16 @@ db = SQLAlchemy(app)
 class Booth(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
-    # --- 신규 추가 컬럼 ---
     mode = db.Column(db.String(20), default='time')  # 'time' (타임별) 또는 'fcfs' (선착순)
+    # [추가] 대기자 명단 운영 여부 (기본값 False)
+    use_waitlist = db.Column(db.Boolean, default=False)
+
     # 선착순(fcfs)일 때 사용
-    total_limit = db.Column(db.Integer, default=0) 
-    # 타임별(time)일 때 사용
+    total_limit = db.Column(db.Integer, default=0)
     start_hour = db.Column(db.Integer, default=11)   # 운영 시작 시간
     end_hour = db.Column(db.Integer, default=16)     # 운영 종료 시간
     slots_per_hour = db.Column(db.Integer, default=3) # 시간당 타임 수 (1이면 11시, 3이면 11시 A,B,C)
     limit_per_slot = db.Column(db.Integer, default=0) # 타임당 인원 제한
-    # ----------------------
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
 
@@ -51,19 +52,28 @@ class Booth(db.Model):
     reservations = db.relationship('Reservation', backref='booth', lazy=True, cascade="all, delete-orphan")
 
     def to_dict(self):
-        # 인원수 계산 로직 포함
-        res_count = Reservation.query.filter_by(booth_id=self.id).count()
+        # 'noshow' 상태를 제외한 정상 및 대기자 예약만 카운트합니다.
+        valid_reservations = [r for r in self.reservations if r.status != 'noshow']
+        res_count = len(valid_reservations)
+        
+        # [추가] 타임별 예약자 수를 계산합니다.
+        slot_counts = {}
+        if self.mode == 'time':
+            for r in valid_reservations:
+                slot_counts[r.time] = slot_counts.get(r.time, 0) + 1
         return {
             "id": self.id,
             "name": self.name,
             "mode": self.mode,
+            "use_waitlist": getattr(self, 'use_waitlist', False),
             "total_limit": self.total_limit,
             "start_hour": self.start_hour,
             "end_hour": self.end_hour,
             "slots_per_hour": self.slots_per_hour,
             "limit_per_slot": self.limit_per_slot,
             "is_active": self.is_active,
-            "count": len(self.reservations) # 수정됨
+            "count": len(self.reservations),
+            "slot_counts": slot_counts
         }
     
 class Reservation(db.Model):
@@ -95,6 +105,14 @@ class Reservation(db.Model):
 
 with app.app_context():
     db.create_all()
+    try:
+        # 이미 만들어져 있는 테이블에 use_waitlist 컬럼을 기본값 0(False)로 강제 추가합니다.
+        db.session.execute(text('ALTER TABLE booth ADD COLUMN use_waitlist BOOLEAN DEFAULT 0'))
+        db.session.commit()
+        print("use_waitlist 컬럼이 DB에 성공적으로 추가되었습니다.")
+    except Exception as e:
+        # 이미 컬럼이 존재해서 나는 에러는 무시합니다.
+        db.session.rollback()
 
 # --- Booth Management API ---
 
@@ -115,6 +133,7 @@ def create_booth():
         new_booth = Booth(
             name=data.get('name'),
             mode=data.get('mode', 'time'),
+            use_waitlist=data.get('use_waitlist', False), # [추가]
             # 아래 값들은 프론트엔드 추가 폼에서 보내주기 전까지는 기본값을 할당합니다.
             total_limit=data.get('total_limit', 0),
             start_hour=data.get('start_hour', 11),
@@ -143,20 +162,14 @@ def update_booth(id):
     data = request.json
     
     try:
-        if 'name' in data:
-            booth.name = data['name']
-        if 'mode' in data:
-            booth.mode = data['mode']
-        if 'total_limit' in data:
-            booth.total_limit = data['total_limit']
-        if 'start_hour' in data:
-            booth.start_hour = data['start_hour']
-        if 'end_hour' in data:
-            booth.end_hour = data['end_hour']
-        if 'slots_per_hour' in data:
-            booth.slots_per_hour = data['slots_per_hour']
-        if 'limit_per_slot' in data:
-            booth.limit_per_slot = data['limit_per_slot']
+        if 'name' in data: booth.name = data['name']
+        if 'mode' in data:  booth.mode = data['mode']
+        if 'use_waitlist' in data: booth.use_waitlist = data['use_waitlist'] # [추가]
+        if 'total_limit' in data: booth.total_limit = data['total_limit']
+        if 'start_hour' in data: booth.start_hour = data['start_hour']
+        if 'end_hour' in data: booth.end_hour = data['end_hour']
+        if 'slots_per_hour' in data: booth.slots_per_hour = data['slots_per_hour']
+        if 'limit_per_slot' in data: booth.limit_per_slot = data['limit_per_slot']
             
         db.session.commit()
         return jsonify({"message": "부스 정보가 수정되었습니다.", "booth": booth.to_dict()}), 200
@@ -199,6 +212,8 @@ def create_reservation():
         if booth.total_limit > 0 and current_count >= booth.total_limit:
             reservation_status = 'waiting'  # 마감 시 대기자 상태로 변경
             is_waiting = True
+        else: # [수정] 대기자를 허용하지 않으면 예약 불가
+                return jsonify({"error": "현재 부스의 정원이 모두 마감되었습니다."}), 400
 
     # 2. 타임별(time) 모드 체크
     else:
@@ -208,8 +223,11 @@ def create_reservation():
             time=selected_time
         ).count()
         if booth.limit_per_slot > 0 and current_time_count >= booth.limit_per_slot:
-            reservation_status = 'waiting'  # 마감 시 대기자 상태로 변경
-            is_waiting = True
+            if booth.use_waitlist: # [수정] 대기자를 허용할 때만
+                reservation_status = 'waiting'
+                is_waiting = True
+            else: # [수정] 대기자를 허용하지 않으면 예약 불가
+                return jsonify({"error": "해당 시간대의 정원이 모두 마감되었습니다."}), 400
 
     new_res = Reservation(
         name=data.get('name'),
