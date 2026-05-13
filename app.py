@@ -207,13 +207,16 @@ def create_reservation():
 
     # 1. 선착순(fcfs) 모드 체크
     if booth.mode == 'fcfs':
-        # 기존 쿼리에서는 'noshow' 등을 제외하지 않고 전체 카운트를 셌으므로 로직 유지
         current_count = Reservation.query.filter_by(booth_id=booth_id).count()
+        
+        # 정원이 다 찼을 경우
         if booth.total_limit > 0 and current_count >= booth.total_limit:
-            reservation_status = 'waiting'  # 마감 시 대기자 상태로 변경
-            is_waiting = True
-        else: # [수정] 대기자를 허용하지 않으면 예약 불가
+            if booth.use_waitlist: # 대기자를 허용할 때만 대기자 상태로
+                reservation_status = 'waiting'
+                is_waiting = True
+            else: # 대기자를 허용하지 않으면 예약 불가 에러 반환
                 return jsonify({"error": "현재 부스의 정원이 모두 마감되었습니다."}), 400
+        # 정원이 다 차지 않았다면 정상적으로 아래 코드(db.session.add)로 넘어가서 'normal'로 접수됩니다.
 
     # 2. 타임별(time) 모드 체크
     else:
