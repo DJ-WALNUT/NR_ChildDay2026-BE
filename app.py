@@ -32,37 +32,54 @@ db = SQLAlchemy(app)
 
 # --- Models ---
 
+# [신규 추가] 행사(Event) 모델
+class Event(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False) # 예: "5월 어린이날 행사"
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
+    
+    # 해당 행사에 속한 부스들을 가져오기 위한 관계 설정
+    booths = db.relationship('Booth', backref='event', lazy=True, cascade="all, delete-orphan")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            # 행사에 속한 부스 목록도 함께 반환 (프론트 트리 구조용)
+            "booths": [b.to_dict() for b in self.booths] 
+        }
+
 class Booth(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    mode = db.Column(db.String(20), default='time')  # 'time' (타임별) 또는 'fcfs' (선착순)
-    # [추가] 대기자 명단 운영 여부 (기본값 False)
-    use_waitlist = db.Column(db.Boolean, default=False)
+    
+    # [추가] 행사에 종속되도록 event_id 외래키 추가 (기존 DB 호환을 위해 일단 nullable=True로 설정)
+    event_id = db.Column(db.Integer, db.ForeignKey('event.id'), nullable=True) 
 
-    # 선착순(fcfs)일 때 사용
+    name = db.Column(db.String(100), nullable=False)
+    mode = db.Column(db.String(20), default='time')  
+    use_waitlist = db.Column(db.Boolean, default=False)
     total_limit = db.Column(db.Integer, default=0)
-    start_hour = db.Column(db.Integer, default=11)   # 운영 시작 시간
-    end_hour = db.Column(db.Integer, default=16)     # 운영 종료 시간
-    slots_per_hour = db.Column(db.Integer, default=3) # 시간당 타임 수 (1이면 11시, 3이면 11시 A,B,C)
-    limit_per_slot = db.Column(db.Integer, default=0) # 타임당 인원 제한
+    start_hour = db.Column(db.Integer, default=11)   
+    end_hour = db.Column(db.Integer, default=16)     
+    slots_per_hour = db.Column(db.Integer, default=3) 
+    limit_per_slot = db.Column(db.Integer, default=0) 
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
 
-    # [추가] 이 줄이 있어야 booth.reservations를 호출할 수 있습니다.
     reservations = db.relationship('Reservation', backref='booth', lazy=True, cascade="all, delete-orphan")
 
     def to_dict(self):
-        # 'noshow' 상태를 제외한 정상 및 대기자 예약만 카운트합니다.
         valid_reservations = [r for r in self.reservations if r.status != 'noshow']
         res_count = len(valid_reservations)
         
-        # [추가] 타임별 예약자 수를 계산합니다.
         slot_counts = {}
         if self.mode == 'time':
             for r in valid_reservations:
                 slot_counts[r.time] = slot_counts.get(r.time, 0) + 1
         return {
             "id": self.id,
+            "event_id": self.event_id, # [추가] 프론트엔드에서 구분할 수 있게 추가
+            "event_name": self.event.name if self.event else "미분류", # [추가]
             "name": self.name,
             "mode": self.mode,
             "use_waitlist": getattr(self, 'use_waitlist', False),
@@ -84,7 +101,8 @@ class Reservation(db.Model):
     ageGroup = db.Column(db.String(20), nullable=False)
     phone = db.Column(db.String(20), nullable=False)
     time = db.Column(db.String(50), nullable=True, default="선착순 접수")
-    status = db.Column(db.String(20), default='normal') # 'normal', 'noshow', 'completed'
+    status = db.Column(db.String(20), default='normal')
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
 
     def to_dict(self):
         return {
@@ -95,31 +113,112 @@ class Reservation(db.Model):
             "ageGroup": self.ageGroup,
             "phone": self.phone,
             "time": self.time,
-            "status": self.status
+            "status": self.status,
+            "created_at": self.created_at.isoformat() if getattr(self, 'created_at', None) else None
         }
 
-    # [경쟁 상태 보완] 동일 부스 내 이름+번호 중복 방지 제약 조건
     __table_args__ = (
         db.UniqueConstraint('booth_id', 'name', 'phone', name='_booth_user_uc'),
     )
 
 with app.app_context():
     db.create_all()
+    
+    # 1. 컬럼 추가 안전장치 (use_waitlist, event_id)
     try:
-        # 이미 만들어져 있는 테이블에 use_waitlist 컬럼을 기본값 0(False)로 강제 추가합니다.
         db.session.execute(text('ALTER TABLE booth ADD COLUMN use_waitlist BOOLEAN DEFAULT 0'))
         db.session.commit()
-        print("use_waitlist 컬럼이 DB에 성공적으로 추가되었습니다.")
-    except Exception as e:
-        # 이미 컬럼이 존재해서 나는 에러는 무시합니다.
+    except:
         db.session.rollback()
+
+    try:
+        db.session.execute(text('ALTER TABLE booth ADD COLUMN event_id INTEGER REFERENCES event(id)'))
+        db.session.commit()
+    except:
+        db.session.rollback()
+
+    # [추가] reservation 테이블에 created_at 컬럼을 안전하게 추가합니다.
+    try:
+        db.session.execute(text('ALTER TABLE reservation ADD COLUMN created_at DATETIME'))
+        db.session.commit()
+    except:
+        db.session.rollback()
+
+    # 2. [추가] 기존 데이터를 살리기 위한 '기본 행사' 마이그레이션 방어 로직
+    default_event = Event.query.first()
+    if not default_event:
+        default_event = Event(name="기본 행사(미분류)")
+        db.session.add(default_event)
+        db.session.commit()
+    
+    # event_id가 없는 예전 부스들을 '기본 행사'에 강제로 연결해줍니다.
+    orphaned_booths = Booth.query.filter_by(event_id=None).all()
+    for b in orphaned_booths:
+        b.event_id = default_event.id
+    if orphaned_booths:
+        db.session.commit()
+        print("기존 부스들을 기본 행사에 연결 완료했습니다.")
+
+# --- Event Management API ---
+
+@app.route('/api/events', methods=['GET', 'POST'])
+def manage_events():
+    if request.method == 'GET':
+        events = Event.query.all()
+        return jsonify([e.to_dict() for e in events])
+    
+    if request.method == 'POST':
+        data = request.json
+        if not data or not data.get('name'):
+            return jsonify({"error": "행사 이름은 필수입니다."}), 400
+        
+        new_event = Event(name=data['name'])
+        db.session.add(new_event)
+        db.session.commit()
+        return jsonify({"message": "행사가 생성되었습니다.", "event": new_event.to_dict()}), 201
+
+# [추가] 행사 이름 수정 API
+@app.route('/api/events/<int:id>', methods=['PUT'])
+def update_event(id):
+    event = Event.query.get_or_404(id)
+    data = request.json
+    
+    if not data or not data.get('name'):
+        return jsonify({"error": "변경할 행사 이름을 입력해주세요."}), 400
+        
+    event.name = data['name']
+    db.session.commit()
+    return jsonify({"message": "행사 이름이 변경되었습니다.", "event": event.to_dict()})
+
+# [수정] 행사 삭제 API (부스 살리기 로직 적용)
+@app.route('/api/events/<int:id>', methods=['DELETE'])
+def delete_event(id):
+    event = Event.query.get_or_404(id)
+    
+    # 기본 행사(가장 첫 번째 생성된 행사, 보통 '기본 행사(미분류)')를 찾습니다.
+    default_event = Event.query.first()
+    
+    # 만약 삭제하려는 행사가 기본 행사라면 삭제를 막습니다. (시스템 보호)
+    if default_event and event.id == default_event.id:
+        return jsonify({"error": "기본 행사(미분류)는 삭제할 수 없습니다."}), 400
+        
+    # 삭제하려는 행사에 속한 부스들을 모두 기본 행사로 대피시킵니다.
+    if default_event:
+        for booth in event.booths:
+            booth.event_id = default_event.id
+        db.session.commit() # 부스 이동을 먼저 확정지음
+    
+    # 그 후 비어있는 행사를 삭제합니다.
+    db.session.delete(event)
+    db.session.commit()
+    return jsonify({"message": "행사가 삭제되었으며, 소속된 부스들은 '기본 행사'로 이동되었습니다."})
+
 
 # --- Booth Management API ---
 
 @app.route('/api/booths', methods=['GET','POST'])
 def create_booth():
     if request.method == 'GET':
-        # 부스 목록 조회 로직 추가
         booths = Booth.query.all()
         return jsonify([b.to_dict() for b in booths])
     
@@ -128,26 +227,32 @@ def create_booth():
         if not data or not data.get('name'):
             return jsonify({"error": "부스 이름은 필수입니다."}), 400
         
-    try:
-        # 프론트에서 보내주는 값 외에 모델에 정의된 신규 컬럼들의 기본값을 확실히 잡아줍니다.
-        new_booth = Booth(
-            name=data.get('name'),
-            mode=data.get('mode', 'time'),
-            use_waitlist=data.get('use_waitlist', False), # [추가]
-            # 아래 값들은 프론트엔드 추가 폼에서 보내주기 전까지는 기본값을 할당합니다.
-            total_limit=data.get('total_limit', 0),
-            start_hour=data.get('start_hour', 11),
-            end_hour=data.get('end_hour', 16),
-            slots_per_hour=data.get('slots_per_hour', 3),
-            limit_per_slot=data.get('limit_per_slot', 0)
-        )
-        db.session.add(new_booth)
-        db.session.commit()
-        return jsonify({"message": "부스가 생성되었습니다.", "id": new_booth.id}), 201
-    except Exception as e:
-        db.session.rollback()
-        print(f"Error creating booth: {str(e)}") # 서버 로그 확인용
-        return jsonify({"error": str(e)}), 400
+        # event_id가 안들어오면 가장 첫 번째 행사(기본 행사)에 할당
+        event_id = data.get('event_id')
+        if not event_id:
+            first_event = Event.query.first()
+            event_id = first_event.id if first_event else None
+
+        try:
+            new_booth = Booth(
+                event_id=event_id, # [추가]
+                name=data.get('name'),
+                mode=data.get('mode', 'time'),
+                use_waitlist=data.get('use_waitlist', False), 
+                total_limit=data.get('total_limit', 0),
+                start_hour=data.get('start_hour', 11),
+                end_hour=data.get('end_hour', 16),
+                slots_per_hour=data.get('slots_per_hour', 3),
+                limit_per_slot=data.get('limit_per_slot', 0)
+            )
+            db.session.add(new_booth)
+            db.session.commit()
+            return jsonify({"message": "부스가 생성되었습니다.", "id": new_booth.id}), 201
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({"error": str(e)}), 400
+
+# ... (이하 기존 toggle_booth_active, update_booth, delete_booth, create_reservation 유지) ...
 
 @app.route('/api/booths/<int:id>/toggle', methods=['PATCH'])
 def toggle_booth_active(id):
@@ -160,11 +265,11 @@ def toggle_booth_active(id):
 def update_booth(id):
     booth = Booth.query.get_or_404(id)
     data = request.json
-    
     try:
+        if 'event_id' in data: booth.event_id = data['event_id'] # [추가] 행사 이동 가능
         if 'name' in data: booth.name = data['name']
         if 'mode' in data:  booth.mode = data['mode']
-        if 'use_waitlist' in data: booth.use_waitlist = data['use_waitlist'] # [추가]
+        if 'use_waitlist' in data: booth.use_waitlist = data['use_waitlist']
         if 'total_limit' in data: booth.total_limit = data['total_limit']
         if 'start_hour' in data: booth.start_hour = data['start_hour']
         if 'end_hour' in data: booth.end_hour = data['end_hour']
@@ -184,14 +289,16 @@ def delete_booth(id):
     db.session.commit()
     return jsonify({"message": "부스가 삭제되었습니다."})
 
+
 # --- Reservation API (Business Logic) ---
+# ... (create_reservation 유지, 이전 응답과 동일하므로 생략하지 않고 포함합니다) ...
+
 @app.route('/api/reservations', methods=['POST'])
 def create_reservation():
     data = request.json
     booth_id = data.get('booth_id')
     booth = Booth.query.get_or_404(booth_id)
 
-    # 중복 예약 체크 (이름 + 전화번호 기반)를 정원 체크보다 먼저 수행합니다.
     existing = Reservation.query.filter_by(
         name=data.get('name'),
         phone=data.get('phone'),
@@ -201,24 +308,17 @@ def create_reservation():
     if existing:
         return jsonify({"error": "이미 해당 부스에 예약된 정보가 있습니다."}), 400
     
-    # 상태 관리를 위한 변수 초기화
     reservation_status = 'normal'
     is_waiting = False
 
-    # 1. 선착순(fcfs) 모드 체크
     if booth.mode == 'fcfs':
         current_count = Reservation.query.filter_by(booth_id=booth_id).count()
-        
-        # 정원이 다 찼을 경우
         if booth.total_limit > 0 and current_count >= booth.total_limit:
-            if booth.use_waitlist: # 대기자를 허용할 때만 대기자 상태로
+            if booth.use_waitlist:
                 reservation_status = 'waiting'
                 is_waiting = True
-            else: # 대기자를 허용하지 않으면 예약 불가 에러 반환
+            else:
                 return jsonify({"error": "현재 부스의 정원이 모두 마감되었습니다."}), 400
-        # 정원이 다 차지 않았다면 정상적으로 아래 코드(db.session.add)로 넘어가서 'normal'로 접수됩니다.
-
-    # 2. 타임별(time) 모드 체크
     else:
         selected_time = data.get('time')
         current_time_count = Reservation.query.filter_by(
@@ -226,10 +326,10 @@ def create_reservation():
             time=selected_time
         ).count()
         if booth.limit_per_slot > 0 and current_time_count >= booth.limit_per_slot:
-            if booth.use_waitlist: # [수정] 대기자를 허용할 때만
+            if booth.use_waitlist:
                 reservation_status = 'waiting'
                 is_waiting = True
-            else: # [수정] 대기자를 허용하지 않으면 예약 불가
+            else:
                 return jsonify({"error": "해당 시간대의 정원이 모두 마감되었습니다."}), 400
 
     new_res = Reservation(
@@ -239,19 +339,18 @@ def create_reservation():
         phone=data.get('phone'),
         time=data.get('time', '선착순 접수'), 
         booth_id=booth_id,
-        status=reservation_status # 'normal' 또는 'waiting'이 저장됨
+        status=reservation_status 
     )
     
     db.session.add(new_res)
     db.session.commit()
     
-    # 프론트엔드에서 대기자 여부를 판단할 수 있도록 응답에 is_waiting 플래그 추가
     response_data = new_res.to_dict()
     response_data['is_waiting'] = is_waiting
     
     return jsonify(response_data), 201
 
-# 부스별 신청자 목록 가져오기 (관리자 대시보드용)
+
 @app.route('/api/booths/<int:booth_id>/reservations', methods=['GET'])
 def get_booth_reservations(booth_id):
     booth = Booth.query.get_or_404(booth_id)
@@ -264,17 +363,44 @@ def get_booth_reservations(booth_id):
         })
     return jsonify({"boothName": booth.name, "reservations": output})
 
-# 전체 데이터 가져오기 (엑셀 추출 등 통합 관리용)
 @app.route('/api/reservations', methods=['GET'])
 def get_all_reservations():
     res_list = Reservation.query.all()
     output = [{
         "id": r.id, "booth_name": r.booth.name, "name": r.name, "gender": r.gender,
-        "ageGroup": r.ageGroup, "phone": r.phone, "time": r.time, "status": r.status
+        "ageGroup": r.ageGroup, "phone": r.phone, "time": r.time, "status": r.status,
+        "created_at": getattr(r, 'created_at', None).isoformat() if getattr(r, 'created_at', None) else None
     } for r in res_list]
     return jsonify(output)
 
-# 노쇼 상태 토글
+# [신규 추가] 다중 부스 엑셀/ZIP 추출을 위한 통합 데이터 제공 API
+@app.route('/api/reservations/bulk', methods=['POST'])
+def get_bulk_reservations():
+    data = request.json
+    booth_ids = data.get('booth_ids', [])
+    
+    if not booth_ids:
+        return jsonify({"error": "조회할 부스 ID 목록이 필요합니다."}), 400
+
+    booths = Booth.query.filter(Booth.id.in_(booth_ids)).all()
+    
+    result = {}
+    for booth in booths:
+        # 각 부스별로 신청자 목록을 배열로 묶어서 딕셔너리 형태로 반환
+        reservations = []
+        for r in booth.reservations:
+            reservations.append({
+                "시간": r.time, "이름": r.name, "성별": r.gender, 
+                "연령": r.ageGroup, "연락처": r.phone, "상태": r.status
+            })
+        # 프론트엔드에서 파일명(시트명)으로 쓰기 좋게 key를 생성 ("행사이름_부스이름")
+        file_key = f"[{booth.event.name}] {booth.name}" if booth.event else booth.name
+        result[file_key] = reservations
+        
+    # 예시 형태: { "[5월행사] 부스1": [{...}, {...}], "[5월행사] 부스2": [{...}] }
+    return jsonify(result), 200
+
+# ... (나머지 상태 토글 및 삭제 API 유지)
 @app.route('/api/reservations/<int:id>/toggle', methods=['PATCH'])
 def toggle_noshow(id):
     res = Reservation.query.get_or_404(id)
@@ -282,7 +408,6 @@ def toggle_noshow(id):
     db.session.commit()
     return jsonify({"message": "Status updated", "status": res.status})
 
-# 체험 완료 처리
 @app.route('/api/reservations/<int:id>/complete', methods=['PATCH'])
 def complete_reservation(id):
     res = Reservation.query.get_or_404(id)
@@ -290,7 +415,6 @@ def complete_reservation(id):
     db.session.commit()
     return jsonify({"message": "Completion status updated", "status": res.status})
 
-# 개별 예약 삭제
 @app.route('/api/reservations/<int:id>', methods=['DELETE'])
 def delete_reservation(id):
     res = Reservation.query.get_or_404(id)
@@ -298,18 +422,15 @@ def delete_reservation(id):
     db.session.commit()
     return jsonify({"message": "Deleted"})
 
-# [주의] 특정 부스의 모든 데이터 삭제
 @app.route('/api/booths/<int:booth_id>/clear', methods=['DELETE'])
 def clear_booth_data(booth_id):
     Reservation.query.filter_by(booth_id=booth_id).delete()
     db.session.commit()
     return jsonify({"message": "All reservations for this booth cleared"})
 
-# 전체 데이터 초기화
 @app.route('/api/clear-all', methods=['DELETE'])
 def clear_all_data():
     Reservation.query.delete()
-    # Booth.query.delete() # 부스 목록까지 지우려면 주석 해제
     db.session.commit()
     return jsonify({"message": "All data cleared"})
 
