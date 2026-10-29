@@ -147,7 +147,8 @@ def partner_stats(token):
 @bp.post("/partner/<token>/export")
 def partner_export(token):
     p, _ = resolve_partner_link(token)
-    return jsonify(export(p, _scoped_ids(p, json_body())))
+    ids = _scoped_ids(p, json_body())
+    return jsonify(export(p, ids) if ids else {"booths": []})  # 내보낼 것이 없으면 감사 기록도 없다
 
 
 @bp.get("/partner/<token>/booths/<int:booth_id>")

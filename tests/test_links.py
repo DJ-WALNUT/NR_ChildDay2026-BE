@@ -57,3 +57,21 @@ def test_partner_link_reservations_and_export(client, db, make_org, make_event, 
     assert len(client.post("/api/link/partner/PTOKEN/export", json={}).json["booths"]) == 1
     assert client.post("/api/link/partner/PTOKEN/stats", json={"mode": "bad"}).status_code == 422
     assert client.delete(f"{base}/reservations").json["deleted"] == 1
+
+def test_partner_link_with_zero_booths(client, db, make_org, make_event):
+    host, linked = make_org(), make_org(); ev = make_event(host)
+    db.execute("INSERT INTO partners (event_id,name,linked_org_id,access_token,created_at) VALUES (?,?,?,?,0)",
+               (ev, "빈단체", linked, "EMPTY"))
+    r = client.post("/api/link/partner/EMPTY/stats", json={"mode": "simple"})
+    assert r.status_code == 200 and r.json["total"] == 0 and len(r.json["rows"]) == 6
+    r = client.post("/api/link/partner/EMPTY/export", json={})
+    assert r.status_code == 200 and r.json == {"booths": []}
+    assert db.execute("SELECT COUNT(*) FROM audit_log WHERE action='export'").fetchone()[0] == 0
+
+def test_booth_link_wins_over_session_cookie(client, db, make_org, make_event, make_booth, make_user, login_as):
+    s = _setup(db, make_org, make_event, make_booth)
+    other = make_org(); make_user("zed", org_id=other); login_as(client, "zed")
+    r = client.post(f"/api/link/booth/{s['tok'](s['free'])}/toggle")
+    assert r.status_code == 200
+    row = db.execute("SELECT actor FROM audit_log WHERE action='booth.toggle'").fetchone()
+    assert row[0] == "booth_link"
