@@ -95,3 +95,14 @@ def test_password_wrong_current_is_422_not_401(client, make_org, make_user, logi
     assert r.status_code == 422 and r.json["error"] == "invalid"
     assert r.json["fields"] == {"current": "현재 비밀번호가 일치하지 않습니다."}
     assert client.get("/api/admin/auth/me").status_code == 200
+
+
+def test_last_seen_written_at_most_once_a_minute(client, db, make_org, make_user, login_as):
+    make_user("hong", org_id=make_org()); login_as(client, "hong")
+    base = db.execute("SELECT last_seen_at FROM sessions").fetchone()[0]
+    client.get("/api/admin/auth/me")
+    assert db.execute("SELECT last_seen_at FROM sessions").fetchone()[0] == base  # 60초 안: 쓰지 않음
+    db.execute("UPDATE sessions SET last_seen_at = last_seen_at - 120")
+    old = db.execute("SELECT last_seen_at FROM sessions").fetchone()[0]
+    client.get("/api/admin/auth/me")
+    assert db.execute("SELECT last_seen_at FROM sessions").fetchone()[0] > old

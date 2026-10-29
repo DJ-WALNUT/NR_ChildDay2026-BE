@@ -164,3 +164,39 @@ def test_main_reports_sqlite_error_cleanly(tmp_path, capsys):
     bad.write_bytes(b"this is not a sqlite database" * 20)
     assert main(["--legacy", str(bad), "--out", str(tmp_path / "app.db")]) == 1
     assert "이관 실패" in capsys.readouterr().err
+
+
+def test_reports_nonstandard_age_groups(tmp_path, legacy_db):
+    c = sqlite3.connect(legacy_db)
+    c.execute("UPDATE reservation SET ageGroup='초등' WHERE id IN (4, 5)")
+    c.execute("UPDATE reservation SET ageGroup='초등' WHERE id = 1")  # 버려지는 부스 -> 세지 않음
+    c.commit()
+    c.close()
+    rep = run(legacy_db, tmp_path / "app.db")
+    assert rep["nonstandard_age_groups"] == 2
+    from scripts.migrate_legacy import format_report
+    assert "비표준 연령대" in format_report(rep)
+
+
+def test_aborts_listing_missing_required_columns(tmp_path, legacy_db):
+    c = sqlite3.connect(legacy_db)
+    c.execute("ALTER TABLE booth DROP COLUMN limit_per_slot")
+    c.execute("ALTER TABLE reservation DROP COLUMN phone")
+    c.commit()
+    c.close()
+    with pytest.raises(MigrationError) as e:
+        run(legacy_db, tmp_path / "app.db")
+    assert "limit_per_slot" in str(e.value) and "booth" in str(e.value)
+    assert not (tmp_path / "app.db").exists()
+
+
+def test_optional_columns_may_be_missing(tmp_path, legacy_db):
+    c = sqlite3.connect(legacy_db)
+    c.execute("ALTER TABLE booth DROP COLUMN use_waitlist")
+    c.execute("ALTER TABLE reservation DROP COLUMN created_at")
+    c.commit()
+    c.close()
+    rep = run(legacy_db, tmp_path / "app.db")
+    assert rep["orgs"]["nareum"]["reservations"] == 2
+    n = sqlite3.connect(tmp_path / "app.db")
+    assert n.execute("SELECT use_waitlist FROM booths WHERE id=20").fetchone() == (0,)

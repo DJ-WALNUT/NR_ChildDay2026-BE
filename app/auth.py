@@ -17,6 +17,7 @@ from .timeutil import now
 COOKIE_NAME = "nr_session"
 IDLE_SEC = 12 * 3600
 ABSOLUTE_SEC = 7 * 24 * 3600
+TOUCH_SEC = 60
 LOGIN_LIMIT = 10
 LOGIN_WINDOW_SEC = 15 * 60
 
@@ -96,7 +97,8 @@ def _load_session():
             or not row["u_active"] or not org_ok):
         db.execute("DELETE FROM sessions WHERE id_hash = ?", (id_hash,))
         return None
-    db.execute("UPDATE sessions SET last_seen_at = ? WHERE id_hash = ?", (t, id_hash))
+    if t - row["last_seen_at"] > TOUCH_SEC:  # 요청마다 쓰지 않는다
+        db.execute("UPDATE sessions SET last_seen_at = ? WHERE id_hash = ?", (t, id_hash))
     g.auth_session = {"id_hash": id_hash, "csrf": row["csrf"]}
     g.auth_user = User(row["id"], row["username"], row["display_name"], row["org_id"],
                        bool(row["is_superadmin"]), bool(row["must_change_password"]))

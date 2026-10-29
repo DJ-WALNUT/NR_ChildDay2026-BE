@@ -70,6 +70,35 @@ def _open_legacy(legacy: Path):
     return conn
 
 
+# 테이블 -> (필수 컬럼, 선택 컬럼). 선택 컬럼은 옛 ALTER 로 뒤늦게 생겼을 수 있어 없으면 NULL 로 본다.
+_LEGACY_COLUMNS = {
+    "event": (("id", "name", "created_at"), ()),
+    "booth": (("id", "name", "mode", "total_limit", "start_hour", "end_hour", "slots_per_hour",
+               "limit_per_slot", "is_active", "created_at"), ("use_waitlist", "event_id")),
+    "reservation": (("id", "booth_id", "name", "gender", "ageGroup", "phone", "time", "status"),
+                    ("created_at",)),
+}
+AGE_GROUPS = ("0~8세", "9~13세", "14~16세", "17~19세", "20~24세", "24세 이상")
+
+
+def _read_table(src, table: str) -> list[dict]:
+    """PRAGMA 로 컬럼을 먼저 확인한다. 필수 컬럼이 빠졌으면 모아서 한 번에 알린다."""
+    have = {r[1] for r in src.execute(f"PRAGMA table_info({table})")}
+    required, optional = _LEGACY_COLUMNS[table]
+    if not have:
+        raise MigrationError(f"기존 DB에 '{table}' 테이블이 없습니다.")
+    missing = [c for c in required if c not in have]
+    if missing:
+        raise MigrationError(f"기존 DB '{table}' 테이블에 필수 컬럼이 없습니다: {', '.join(missing)}")
+    rows = []
+    for r in src.execute(f"SELECT * FROM {table} ORDER BY id"):
+        d = dict(r)
+        for c in optional:
+            d.setdefault(c, None)
+        rows.append(d)
+    return rows
+
+
 def _check_values(kept_booths, kept_resv):
     for label, rows, col, allowed in (
         ("booth.mode", kept_booths, "mode", MODES),
@@ -94,9 +123,7 @@ def _check_values(kept_booths, kept_resv):
 
 
 def _migrate(src, out: Path, now: float) -> dict:
-    events = src.execute("SELECT * FROM event ORDER BY id").fetchall()
-    booths = src.execute("SELECT * FROM booth ORDER BY id").fetchall()
-    resv = src.execute("SELECT * FROM reservation ORDER BY id").fetchall()
+    events, booths, resv = (_read_table(src, t) for t in ("event", "booth", "reservation"))
 
     default_ids = {e["id"] for e in events if e["name"] == DEFAULT_EVENT}
     host_ids = {e["id"] for e in events if e["name"] == HOST_EVENT}
@@ -127,6 +154,7 @@ def _migrate(src, out: Path, now: float) -> dict:
         "status": {s: 0 for s in STATUSES},
         "slot_renamed": 0,
         "nonstandard_codes": 0,
+        "nonstandard_age_groups": 0,
         "adjusted_booths": [],
     }
     migrate(out)
@@ -175,6 +203,8 @@ def _migrate(src, out: Path, now: float) -> dict:
             code = r["phone"]
             if not (isinstance(code, str) and len(code) == 4 and code.isascii() and code.isdigit()):
                 report["nonstandard_codes"] += 1
+            if r["ageGroup"] not in AGE_GROUPS:
+                report["nonstandard_age_groups"] += 1
             conn.execute(
                 "INSERT INTO reservations (id, booth_id, name, gender, age_group, code, slot, status, created_at)"
                 " VALUES (?,?,?,?,?,?,?,?,?)",
@@ -230,6 +260,7 @@ def format_report(rep: dict) -> str:
     lines.append("[상태] " + ", ".join(f"{k} {v}" for k, v in rep["status"].items()))
     lines.append(f"슬롯 이름 변경('선착순 접수' -> '선착순'): {rep['slot_renamed']}")
     lines.append(f"비표준 식별번호(4자리 숫자 아님, 그대로 이관): {rep['nonstandard_codes']}")
+    lines.append(f"비표준 연령대(여섯 구간 외, 그대로 이관): {rep['nonstandard_age_groups']}")
     lines.append(f"조정된 부스 값: {len(rep['adjusted_booths'])}")
     for a in rep["adjusted_booths"]:
         extra = f" (새 슬롯 목록에 없는 신청 {a['orphaned_reservations']}건)" if a.get("orphaned_reservations") else ""

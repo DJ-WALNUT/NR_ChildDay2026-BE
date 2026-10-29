@@ -84,7 +84,7 @@ CREATE INDEX idx_res_booth_slot ON reservations(booth_id, slot);
 
 CREATE TABLE audit_log (
   id INTEGER PRIMARY KEY,
-  org_id INTEGER,                     -- 대상의 소유 기관 (기관 생성 등 전역 작업은 NULL)
+  org_id INTEGER,                     -- 대상의 소유 기관 (기관 생성은 새 기관의 id, 백업 등 기관과 무관한 작업만 NULL)
   actor_org_id INTEGER,               -- 행위자 계정의 기관 (링크·슈퍼관리자는 NULL)
   user_id INTEGER,                    -- 계정 행위일 때
   actor TEXT NOT NULL,                -- 'user' | 'booth_link' | 'partner_link' | 'system'
