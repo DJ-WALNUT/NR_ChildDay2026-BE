@@ -190,6 +190,26 @@ def test_aborts_listing_missing_required_columns(tmp_path, legacy_db):
     assert not (tmp_path / "app.db").exists()
 
 
+def test_aborts_when_booth_event_id_column_missing(tmp_path, legacy_db):
+    c = sqlite3.connect(legacy_db)
+    c.execute("ALTER TABLE booth DROP COLUMN event_id")
+    c.commit()
+    c.close()
+    with pytest.raises(MigrationError, match="event_id"):
+        run(legacy_db, tmp_path / "app.db")
+    assert not (tmp_path / "app.db").exists()
+
+
+def test_aborts_when_every_booth_would_be_dropped(tmp_path, legacy_db):
+    c = sqlite3.connect(legacy_db)
+    c.execute("UPDATE booth SET event_id = NULL")
+    c.commit()
+    c.close()
+    with pytest.raises(MigrationError, match="모든 부스"):
+        run(legacy_db, tmp_path / "app.db")
+    assert not (tmp_path / "app.db").exists()
+
+
 def test_optional_columns_may_be_missing(tmp_path, legacy_db):
     c = sqlite3.connect(legacy_db)
     c.execute("ALTER TABLE booth DROP COLUMN use_waitlist")

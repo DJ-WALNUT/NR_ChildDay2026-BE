@@ -73,8 +73,9 @@ def _open_legacy(legacy: Path):
 # 테이블 -> (필수 컬럼, 선택 컬럼). 선택 컬럼은 옛 ALTER 로 뒤늦게 생겼을 수 있어 없으면 NULL 로 본다.
 _LEGACY_COLUMNS = {
     "event": (("id", "name", "created_at"), ()),
-    "booth": (("id", "name", "mode", "total_limit", "start_hour", "end_hour", "slots_per_hour",
-               "limit_per_slot", "is_active", "created_at"), ("use_waitlist", "event_id")),
+    # event_id 는 부스를 기관에 잇는 유일한 연결이라 필수다. 없으면 모든 부스가 버려진다.
+    "booth": (("id", "event_id", "name", "mode", "total_limit", "start_hour", "end_hour", "slots_per_hour",
+               "limit_per_slot", "is_active", "created_at"), ("use_waitlist",)),
     "reservation": (("id", "booth_id", "name", "gender", "ageGroup", "phone", "time", "status"),
                     ("created_at",)),
 }
@@ -145,6 +146,8 @@ def _migrate(src, out: Path, now: float) -> dict:
     kept_booths = [b for b in booths if b["event_id"] is not None and b["event_id"] not in default_ids]
     kept_booth_ids = {b["id"] for b in kept_booths}
     kept_resv = [r for r in resv if r["booth_id"] in kept_booth_ids]
+    if booths and not kept_booths:
+        raise MigrationError("모든 부스가 버려지게 됩니다(행사 연결이 없거나 전부 기본 행사 소속). 기존 DB를 확인하세요.")
     _check_values(kept_booths, kept_resv)
 
     report = {
