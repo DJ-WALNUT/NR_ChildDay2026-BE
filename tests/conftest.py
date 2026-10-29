@@ -92,3 +92,51 @@ def api():
         return client.open(url, method=method, json=json, headers=headers)
 
     return _api
+
+
+@pytest.fixture
+def make_event(app):
+    from app.timeutil import now
+
+    def _make(org_id, name="행사") -> int:
+        with app.app_context():
+            cur = get_db().execute(
+                "INSERT INTO events (org_id, name, created_at) VALUES (?,?,?)", (org_id, name, now()))
+            return cur.lastrowid
+
+    return _make
+
+
+@pytest.fixture
+def make_booth(app):
+    from app.security import link_token
+    from app.timeutil import now
+
+    def _make(event_id, **fields) -> int:
+        row = {"event_id": event_id, "name": "부스", "mode": "time",
+               "manage_token": link_token(), "created_at": now(), **fields}
+        cols = ", ".join(row)
+        marks = ", ".join("?" for _ in row)
+        with app.app_context():
+            cur = get_db().execute(f"INSERT INTO booths ({cols}) VALUES ({marks})", tuple(row.values()))
+            return cur.lastrowid
+
+    return _make
+
+
+@pytest.fixture
+def make_reservation(app):
+    from app.timeutil import now
+
+    def _make(booth_id, name, code="1234", slot="11시 A타임", status="normal", gender="남",
+              age_group="9~13세", created_at=None) -> int:
+        with app.app_context():
+            cur = get_db().execute(
+                "INSERT INTO reservations (booth_id, name, gender, age_group, code, slot, status, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (booth_id, name, gender, age_group, code, slot, status,
+                 now() if created_at is None else created_at),
+            )
+            return cur.lastrowid
+
+    return _make
