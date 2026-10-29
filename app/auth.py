@@ -23,7 +23,7 @@ LOGIN_WINDOW_SEC = 15 * 60
 # CSRF 예외: 로그인만 (로그인 전에 쓰는 유일한 변경 요청)
 _CSRF_EXEMPT = re.compile(r"/api/admin/auth/login")
 # 비밀번호 변경 전에도 허용되는 경로
-_PW_GATE_ALLOWED = re.compile(r"/api/admin/auth/(me|password|logout)")
+_PW_GATE_ALLOWED = re.compile(r"/api/admin/auth/(login|me|password|logout)")
 
 # 타이밍 차이로 아이디 존재 여부가 드러나지 않도록 없는 계정도 같은 해시 검증을 한다
 DUMMY_HASH = hash_password("dummy-password-for-timing")

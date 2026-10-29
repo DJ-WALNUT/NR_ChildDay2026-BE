@@ -21,8 +21,14 @@ def client(app):
 
 @pytest.fixture
 def db(app):
-    with app.app_context():
-        yield get_db()
+    """독립 autocommit 연결. 앱 컨텍스트를 잡지 않아 요청 간 flask.g 가 새지 않는다."""
+    from pathlib import Path
+
+    from app.db import _connect
+
+    conn = _connect(Path(app.config["DATA_DIR"]) / "app.db")
+    yield conn
+    conn.close()
 
 
 # ---- 팩토리 (헬퍼 callable 을 돌려주는 fixture) ----

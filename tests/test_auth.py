@@ -45,8 +45,34 @@ def test_password_change_revokes_other_sessions(app, make_org, make_user, login_
 
 def test_deactivated_mid_session(client, db, make_org, make_user, login_as):
     uid = make_user("hong", org_id=make_org()); login_as(client, "hong")
+    assert client.get("/api/admin/auth/me").status_code == 200
     db.execute("UPDATE users SET is_active = 0 WHERE id = ?", (uid,))
     assert client.get("/api/admin/auth/me").status_code == 401
+
+def test_org_deactivated_mid_session(client, db, make_org, make_user, login_as):
+    org = make_org(); make_user("hong", org_id=org); login_as(client, "hong")
+    assert client.get("/api/admin/auth/me").status_code == 200
+    db.execute("UPDATE organizations SET is_active = 0 WHERE id = ?", (org,))
+    assert client.get("/api/admin/auth/me").status_code == 401
+
+def test_idle_expiry(client, db, make_org, make_user, login_as):
+    make_user("hong", org_id=make_org()); login_as(client, "hong")
+    assert client.get("/api/admin/auth/me").status_code == 200
+    db.execute("UPDATE sessions SET last_seen_at = last_seen_at - 13 * 3600")
+    assert client.get("/api/admin/auth/me").status_code == 401
+
+def test_absolute_expiry(client, db, make_org, make_user, login_as):
+    make_user("hong", org_id=make_org()); login_as(client, "hong")
+    assert client.get("/api/admin/auth/me").status_code == 200
+    db.execute("UPDATE sessions SET expires_at = 1")
+    assert client.get("/api/admin/auth/me").status_code == 401
+
+def test_login_allowed_with_stale_must_change_session(client, make_org, make_user, login_as):
+    org = make_org()
+    make_user("old", org_id=org, must_change=True); make_user("hong", org_id=org)
+    login_as(client, "old")
+    r = client.post("/api/admin/auth/login", json={"username": "hong", "password": "password1"})
+    assert r.status_code == 200 and r.json["user"]["username"] == "hong"
 
 def test_cli_create_superadmin(app):
     r = app.test_cli_runner().invoke(args=["create-superadmin", "--username", "Root", "--password", "rootpass1"])
@@ -55,11 +81,9 @@ def test_cli_create_superadmin(app):
     me = c.post("/api/admin/auth/login", json={"username": "root", "password": "rootpass1"}).json
     assert me["user"]["is_superadmin"] is True and me["user"]["must_change_password"] is False
 
-def test_login_and_password_change_are_audited(app, client, make_org, make_user, login_as, api):
+def test_login_and_password_change_are_audited(client, db, make_org, make_user, login_as, api):
     org = make_org(); make_user("hong", org_id=org); login_as(client, "hong")
     api(client, "POST", "/api/admin/auth/password", json={"current": "password1", "new": "newpass99"})
-    with app.app_context():
-        from app.db import get_db
-        rows = get_db().execute("SELECT action, org_id, actor_label FROM audit_log ORDER BY id").fetchall()
+    rows = db.execute("SELECT action, org_id, actor_label FROM audit_log ORDER BY id").fetchall()
     assert [(r["action"], r["org_id"]) for r in rows] == [("auth.login", org), ("auth.password_change", org)]
     assert rows[0]["actor_label"] == "hong(hong)"
