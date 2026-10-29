@@ -8,7 +8,7 @@ from flask import Blueprint, jsonify, request
 
 from .. import timeutil
 from ..access import BOOTH_SQL, load_booth, require_booth, require_event, require_org
-from ..audit import audit, list_audit
+from ..audit import audit
 from ..auth import login_required
 from ..booth_ops import (DEFAULTS, SETTING_FIELDS, apply_settings, booth_json, clear_reservations,
                          delete_reservation, export, list_reservations, parse_booth_ids, parse_stats_mode, set_status,
@@ -18,7 +18,7 @@ from ..errors import ValidationError, not_found
 from ..principal import current_principal
 from ..security import link_token
 from ..timeutil import now
-from .common import json_body
+from .common import audit_query, int_param, json_body
 
 bp = Blueprint("admin_booths", __name__, url_prefix="/api/admin")
 
@@ -265,21 +265,6 @@ def export_route():
     for i in ids:
         require_booth(i, "manage")
     return jsonify(export(current_principal(), ids))
-
-
-def int_param(name: str, default: int | None = None) -> int | None:
-    raw = request.args.get(name)
-    if raw is None or raw == "":
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        raise ValidationError({name: "정수여야 합니다."}) from None
-
-
-def audit_query(org_id: int | None) -> dict:
-    return list_audit(org_id=org_id, before=int_param("before"), limit=int_param("limit", 50),
-                      action=request.args.get("action") or None)
 
 
 def _booths_of(event_id: int, partner_id: int | None = None) -> list[dict]:

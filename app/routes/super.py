@@ -18,8 +18,7 @@ from ..db import get_db, tx
 from ..errors import ValidationError, conflict, not_found
 from ..principal import current_principal
 from ..timeutil import KST, now
-from .admin_booths import audit_query, int_param
-from .common import json_body
+from .common import audit_query, int_param, json_body
 
 bp = Blueprint("super", __name__, url_prefix="/api/admin/super")
 
