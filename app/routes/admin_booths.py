@@ -9,10 +9,11 @@ from flask import Blueprint, jsonify
 from ..access import load_booth, require_booth, require_event
 from ..audit import audit
 from ..auth import login_required
-from ..booth_ops import (DEFAULTS, SETTING_FIELDS, apply_settings, booth_json, toggle,
-                         validate_settings)
+from ..booth_ops import (DEFAULTS, SETTING_FIELDS, apply_settings, booth_json, clear_reservations,
+                         delete_reservation, export, list_reservations, parse_booth_ids, set_status,
+                         stats, toggle, validate_settings)
 from ..db import get_db, tx
-from ..errors import ValidationError
+from ..errors import ValidationError, not_found
 from ..principal import current_principal
 from ..security import link_token
 from ..timeutil import now
@@ -207,3 +208,64 @@ def rotate_token(booth_id: int):
         audit(current_principal(), "booth.rotate_token", f"booth:{booth_id}",
               f"부스 링크 재발급: {booth['name']}", org_id=booth["org_id"])
     return jsonify(manage_token=token)
+
+
+@bp.get("/booths/<int:booth_id>/reservations")
+@login_required
+def booth_reservations(booth_id: int):
+    require_booth(booth_id, "manage")
+    return jsonify(reservations=list_reservations(booth_id))
+
+
+def _reservation_booth(rid: int) -> sqlite3.Row:
+    row = get_db().execute("SELECT booth_id FROM reservations WHERE id = ?", (rid,)).fetchone()
+    if row is None:
+        not_found()
+    return require_booth(row["booth_id"], "manage")
+
+
+@bp.patch("/reservations/<int:rid>")
+@login_required
+def patch_reservation(rid: int):
+    body = json_body()
+    booth = _reservation_booth(rid)
+    status = body.get("status")
+    if not isinstance(status, str):
+        raise ValidationError({"status": "올바르지 않은 상태입니다."})
+    return jsonify(set_status(current_principal(), booth, rid, status))
+
+
+@bp.delete("/reservations/<int:rid>")
+@login_required
+def remove_reservation(rid: int):
+    delete_reservation(current_principal(), _reservation_booth(rid), rid)
+    return "", 204
+
+
+@bp.delete("/booths/<int:booth_id>/reservations")
+@login_required
+def clear_booth_reservations(booth_id: int):
+    booth = require_booth(booth_id, "manage")
+    return jsonify(deleted=clear_reservations(current_principal(), booth))
+
+
+@bp.post("/stats")
+@login_required
+def stats_route():
+    body = json_body()
+    ids = parse_booth_ids(body)
+    mode = body.get("mode", "simple")
+    if mode not in ("simple", "strict"):
+        raise ValidationError({"mode": "simple 또는 strict 여야 합니다."})
+    for i in ids:
+        require_booth(i, "manage")
+    return jsonify(stats(ids, mode))
+
+
+@bp.post("/export")
+@login_required
+def export_route():
+    ids = parse_booth_ids(json_body())
+    for i in ids:
+        require_booth(i, "manage")
+    return jsonify(export(current_principal(), ids))

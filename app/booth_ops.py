@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
-from typing import Mapping
+from typing import Literal, Mapping
 
 from .access import load_booth
 from .audit import audit
 from .capacity import availability, occupancy
 from .db import get_db, tx
-from .errors import ValidationError
+from .errors import ValidationError, not_found
 from .principal import Principal
 
 SETTING_FIELDS = ("name", "mode", "use_waitlist", "total_limit", "start_hour", "end_hour",
@@ -122,3 +123,110 @@ def toggle(p: Principal, booth: sqlite3.Row) -> bool:
               f"{booth['name']} {'운영 시작' if new else '운영 중지'}", org_id=booth["org_id"],
               detail={"is_active": bool(new)})
     return bool(new)
+
+
+AGE_GROUPS = ("0~8세", "9~13세", "14~16세", "17~19세", "20~24세", "24세 이상")
+GENDERS = ("남", "여")
+STATUSES = ("normal", "waiting", "noshow", "completed")
+MAX_BOOTHS = 500
+
+
+def reservation_json(r: sqlite3.Row) -> dict:
+    return {"id": r["id"], "booth_id": r["booth_id"], "name": r["name"], "gender": r["gender"],
+            "age_group": r["age_group"], "code": r["code"], "slot": r["slot"], "status": r["status"],
+            "created_at": r["created_at"]}
+
+
+def _slot_key(r: dict) -> tuple:
+    m = re.match(r"(\d+)시", r["slot"])
+    return (int(m.group(1)) if m else -1, r["slot"], r["id"])
+
+
+def list_reservations(booth_id: int) -> list[dict]:
+    rows = get_db().execute("SELECT * FROM reservations WHERE booth_id = ?", (booth_id,)).fetchall()
+    return sorted((reservation_json(r) for r in rows), key=_slot_key)
+
+
+def _own_reservation(booth: sqlite3.Row, rid: int) -> sqlite3.Row:
+    r = get_db().execute("SELECT * FROM reservations WHERE id = ? AND booth_id = ?",
+                         (rid, booth["id"])).fetchone()
+    if r is None:
+        not_found()
+    return r
+
+
+def set_status(p: Principal, booth: sqlite3.Row, rid: int, status: str) -> dict:
+    if status not in STATUSES:
+        raise ValidationError({"status": "올바르지 않은 상태입니다."})
+    r = _own_reservation(booth, rid)
+    with tx() as conn:
+        conn.execute("UPDATE reservations SET status = ? WHERE id = ?", (status, rid))
+        over = False
+        if r["status"] == "waiting" and status == "normal":
+            limit = booth["total_limit"] if booth["mode"] == "fcfs" else booth["limit_per_slot"]
+            used = occupancy(conn, booth["id"]).get(r["slot"], 0)
+            over = limit > 0 and used > limit
+    out = {"reservation": reservation_json(get_db().execute(
+        "SELECT * FROM reservations WHERE id = ?", (rid,)).fetchone())}
+    if over:
+        out["over_capacity"] = True
+    return out
+
+
+def delete_reservation(p: Principal, booth: sqlite3.Row, rid: int) -> None:
+    r = _own_reservation(booth, rid)
+    with tx() as conn:
+        conn.execute("DELETE FROM reservations WHERE id = ?", (rid,))
+        audit(p, "reservation.delete", f"booth:{booth['id']}",
+              f"신청 삭제: {r['name']} ({booth['name']} {r['slot']})", org_id=booth["org_id"])
+
+
+def clear_reservations(p: Principal, booth: sqlite3.Row) -> int:
+    with tx() as conn:
+        n = conn.execute("DELETE FROM reservations WHERE booth_id = ?", (booth["id"],)).rowcount
+        audit(p, "reservation.clear", f"booth:{booth['id']}", f"{booth['name']} 신청 {n}건 초기화",
+              org_id=booth["org_id"], detail={"deleted": n})
+    return n
+
+
+def parse_booth_ids(body) -> list[int]:
+    ids = body.get("booth_ids")
+    if (not isinstance(ids, list) or not 1 <= len(ids) <= MAX_BOOTHS
+            or not all(_is_int(i) for i in ids)):
+        raise ValidationError({"booth_ids": f"부스 ID {MAX_BOOTHS}개 이하의 목록이 필요합니다."})
+    return list(dict.fromkeys(ids))
+
+
+def stats(booth_ids: list[int], mode: Literal["simple", "strict"]) -> dict:
+    marks = ",".join("?" for _ in booth_ids)
+    rows = get_db().execute(
+        f"SELECT name, gender, age_group FROM reservations "
+        f"WHERE booth_id IN ({marks}) AND status != 'noshow'", booth_ids).fetchall()
+    people = [tuple(r) for r in rows]
+    if mode == "strict":
+        people = list(set(people))
+    table = {a: {"age_group": a, "male": 0, "female": 0, "total": 0} for a in AGE_GROUPS}
+    for _name, gender, age in people:
+        row = table.get(age)
+        if row is None or gender not in GENDERS:
+            continue
+        row["male" if gender == "남" else "female"] += 1
+        row["total"] += 1
+    out = list(table.values())
+    male, female = sum(r["male"] for r in out), sum(r["female"] for r in out)
+    return {"rows": out, "male": male, "female": female, "total": male + female}
+
+
+def export(p: Principal, booth_ids: list[int]) -> dict:
+    booths, first_org = [], None
+    for bid in booth_ids:
+        b = load_booth(bid)
+        if first_org is None:
+            first_org = b["org_id"]
+        rows = [{k: v for k, v in r.items() if k not in ("id", "booth_id")} for r in list_reservations(bid)]
+        booths.append({"booth_id": bid, "event_name": b["event_name"], "booth_name": b["name"],
+                       "rows": rows})
+    with tx():
+        audit(p, "export", None, f"명단 내보내기: 부스 {len(booth_ids)}개",
+              org_id=first_org, detail={"booth_ids": booth_ids})
+    return {"booths": booths}
