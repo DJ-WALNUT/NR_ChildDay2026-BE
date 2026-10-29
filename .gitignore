@@ -2,3 +2,7 @@
 *.db
 *.sqlite3
 instance/
+data/
+__pycache__/
+.env
+.pytest_cache/
