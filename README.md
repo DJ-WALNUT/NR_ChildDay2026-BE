@@ -28,7 +28,7 @@ python -m pytest -q
 
 | 이름 | 기본값 | 의미 |
 |---|---|---|
-| `DATA_DIR` | `./data` (Docker: `/data`) | `app.db`를 두는 폴더 |
+| `DATA_DIR` | `./data` (Docker: `/data`) | `app.db`(DB)와 `assets/`(업로드한 로고 이미지)를 두는 폴더 |
 | `CORS_ORIGINS` | `http://localhost:5173,https://nrbooth.team-cluster.kr,https://2026child.team-cluster.kr` | CORS 허용 출처(쉼표 구분) |
 | `SESSION_COOKIE_SECURE` | `1` | 세션 쿠키 Secure 속성. `0`이면 HTTP에서도 전송(로컬 개발용) |
 | `TRUSTED_PROXY_HOPS` | `2` | 신뢰할 프록시 단수(Cloudflare 1 + 리버스 프록시 1). 직접 연결이면 `0` |
@@ -58,7 +58,7 @@ docker run -d --name nr-booth-be --restart unless-stopped -p 5005:5005 -v /volum
 기존(단일 행사) 서비스를 새 멀티테넌트 서버로 바꾸는 순서. 1·2단계(백엔드·프론트)는 함께 배포한다. 새 API는 기존 프론트와 호환되지 않는다.
 
 0. **쓰기 중단**: 기존 컨테이너를 먼저 멈춘다(`docker stop <기존 컨테이너>`). 쓰기를 멈추지 않고 복사하면 그 사이의 신청이 이관본에서 빠지거나 DB가 깨진 채 복사될 수 있다. 기존 컨테이너는 포트 5005를 쓰고 있으므로 새 컨테이너를 띄우기 전에도 멈춰 있어야 한다(새 컨테이너 기동이 끝나 정상 확인되면 기존 컨테이너는 삭제하거나 `--restart` 정책을 해제해 재부팅 때 되살아나지 않게 한다).
-1. **백업**: 멈춘 상태에서 NAS의 운영 DB(`reservations.db`)를 복사해 둔다(`-wal`/`-shm` 파일이 있으면 함께). 이관은 이 복사본(아래 `/old`)으로 한다. 이관 스크립트는 원본을 읽기 전용으로만 열지만 백업은 필수다.
+1. **백업**: 멈춘 상태에서 NAS의 운영 DB(`reservations.db`)를 복사해 둔다(`-wal`/`-shm` 파일이 있으면 함께). 이관은 이 복사본(아래 `/old`)으로 한다. 이관 스크립트는 원본을 읽기 전용으로만 열지만 백업은 필수다. 이후 운영 중의 백업은 `DATA_DIR` 전체(`app.db`와 `assets/`, Docker는 `/data` 볼륨 전체)를 대상으로 한다. 슈퍼관리자 백업 엔드포인트(`GET /backup`)는 DB만 담으므로 로고 이미지는 포함되지 않는다.
 2. **새 이미지 빌드**: `docker build -t nr-booth-be .`
 3. **이관**: 새 이미지로 스크립트를 실행해 `/data/app.db`를 만든다. 출력 파일이 이미 있으면 거부한다.
    ```bash
@@ -84,3 +84,5 @@ docker run -d --name nr-booth-be --restart unless-stopped -p 5005:5005 -v /volum
 
 인증(세션 + CSRF 헤더), 방문객·기관 관리자·슈퍼관리자·부스 링크 API의 경로와 권한은
 [설계 문서 7절](docs/superpowers/specs/2026-10-29-multitenant-design.md)을 참고한다. 모든 경로는 `/api/` 아래에 있다.
+
+참고: 로고를 삭제·교체해도 이전 URL의 이미지는 브라우저/CDN 캐시(`immutable`, 1년)에 남아 있을 수 있다. 캐시를 비우기 전까지는 옛 URL로 보일 수 있다.

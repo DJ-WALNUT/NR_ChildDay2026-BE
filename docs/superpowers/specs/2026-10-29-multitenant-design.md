@@ -421,6 +421,7 @@ CSRF: 로그인을 뺀 모든 변경 요청에 `X-CSRF-Token`(로그인·`me`가
 
 `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`,
 `/api/*`에 `Cache-Control: no-store`, `X-Robots-Tag: noindex`.
+예외: `/api/public/assets/*`(로고 이미지)는 내용 해시 이름이라 `Cache-Control: public, max-age=31536000, immutable`이며 `Content-Security-Policy: default-src 'none'; sandbox`를 붙인다.
 링크 토큰이 URL에 있으므로 프론트 쪽도 `Referrer-Policy: no-referrer`를 설정한다(2단계).
 
 ## 8. 데이터 이관
@@ -445,7 +446,7 @@ CSRF: 로그인을 뺀 모든 변경 요청에 `X-CSRF-Token`(로그인·`me`가
 - 절차: 운영 DB 백업 → 이관 스크립트 → 새 컨테이너 기동 → `flask create-superadmin` →
   기관 계정 발급 → 기존 관리자 QR을 부스 링크 QR로 교체 안내.
 - Docker: `python:3.11-slim`, 의존성 `flask flask-cors argon2-cffi python-dotenv gunicorn`.
-  `requirements.txt`로 버전 고정. DB는 볼륨 `DATA_DIR`에 둔다.
+  `requirements.txt`로 버전 고정. DB(`app.db`)와 로고 이미지(`assets/`)는 볼륨 `DATA_DIR`에 둔다. 슈퍼관리자 `GET /backup`은 DB만 담으므로 전체 백업은 `/data` 볼륨 전체다.
 - 환경변수: `DATA_DIR`, `CORS_ORIGINS`, `SESSION_COOKIE_SECURE`(기본 1), `TRUSTED_PROXY_HOPS`.
 
 ## 10. 테스트 (pytest)
