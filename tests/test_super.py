@@ -69,3 +69,10 @@ def test_backup_contains_data_and_forbidden_for_owner(app, client, make_org, mak
     other = app.test_client()
     make_user("hong", org_id=make_org()); login_as(other, "hong")
     assert api(other, "GET", "/api/admin/super/backup").status_code == 403
+
+
+def test_whoami_ip(client, make_user, login_as, api):
+    make_user("root", superadmin=True); login_as(client, "root")
+    r = client.get("/api/admin/super/whoami-ip", headers={"X-Forwarded-For": "1.2.3.4"})
+    assert r.status_code == 200
+    assert set(r.json) == {"remote_addr", "x_forwarded_for"} and r.json["x_forwarded_for"] == "1.2.3.4"

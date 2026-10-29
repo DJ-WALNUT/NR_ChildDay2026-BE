@@ -10,7 +10,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from flask import Blueprint, current_app, jsonify, send_file
+from flask import Blueprint, current_app, jsonify, request, send_file
 
 from ..audit import audit
 from ..auth import revoke_sessions, superadmin_required
@@ -150,3 +150,11 @@ def backup():
 @superadmin_required
 def audit_log():
     return jsonify(audit_query(int_param("org_id")))
+
+
+@bp.get("/whoami-ip")
+@superadmin_required
+def whoami_ip():
+    """프록시 홉 수(TRUSTED_PROXY_HOPS) 점검용: 앱이 보는 접속 IP."""
+    return jsonify(remote_addr=request.remote_addr,
+                   x_forwarded_for=request.headers.get("X-Forwarded-For"))

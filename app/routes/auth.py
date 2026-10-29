@@ -90,7 +90,8 @@ def change_password():
     row = get_db().execute("SELECT password_hash FROM users WHERE id = ?", (u.id,)).fetchone()
     if not isinstance(current, str) or not verify_password(row["password_hash"], current):
         ratelimit.hit(key)
-        raise ApiError(401, "invalid_credentials")
+        # 401 은 "세션 없음"으로 해석되므로 쓰지 않는다
+        raise ValidationError({"current": "현재 비밀번호가 일치하지 않습니다."})
     problem = "필수 항목입니다." if not isinstance(new, str) else password_problem(new, u.username)
     if problem:
         raise ValidationError({"new": problem})

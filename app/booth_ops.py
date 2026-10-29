@@ -116,9 +116,9 @@ def update_settings(p: Principal, booth: sqlite3.Row, body: dict) -> sqlite3.Row
 
 
 def toggle(p: Principal, booth: sqlite3.Row) -> bool:
-    new = 0 if booth["is_active"] else 1
     with tx() as conn:
-        conn.execute("UPDATE booths SET is_active = ? WHERE id = ?", (new, booth["id"]))
+        conn.execute("UPDATE booths SET is_active = 1 - is_active WHERE id = ?", (booth["id"],))
+        new = conn.execute("SELECT is_active FROM booths WHERE id = ?", (booth["id"],)).fetchone()[0]
         audit(p, "booth.toggle", f"booth:{booth['id']}",
               f"{booth['name']} {'운영 시작' if new else '운영 중지'}", org_id=booth["org_id"],
               detail={"is_active": bool(new)})
@@ -231,15 +231,15 @@ def stats(booth_ids: list[int], mode: Literal["simple", "strict"]) -> dict:
 
 
 def export(p: Principal, booth_ids: list[int]) -> dict:
-    booths, first_org = [], None
+    booths, by_org = [], {}
     for bid in booth_ids:
         b = load_booth(bid)
-        if first_org is None:
-            first_org = b["org_id"]
+        by_org.setdefault(b["org_id"], []).append(bid)
         rows = [{k: v for k, v in r.items() if k not in ("id", "booth_id")} for r in list_reservations(bid)]
         booths.append({"booth_id": bid, "event_name": b["event_name"], "booth_name": b["name"],
                        "rows": rows})
     with tx():
-        audit(p, "export", None, f"명단 내보내기: 부스 {len(booth_ids)}개",
-              org_id=first_org, detail={"booth_ids": booth_ids})
+        for org_id, ids in by_org.items():  # 부스 소유 기관마다 한 건씩 남겨 각 기관이 볼 수 있게 한다
+            audit(p, "export", None, f"명단 내보내기: 부스 {len(ids)}개",
+                  org_id=org_id, detail={"booth_ids": ids})
     return {"booths": booths}

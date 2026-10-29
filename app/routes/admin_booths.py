@@ -191,11 +191,13 @@ def batch_status():
     with tx() as conn:
         conn.executemany("UPDATE booths SET is_active = ? WHERE id = ?",
                          [(int(active), b["id"]) for b in booths])
-        # 감사 1건. 기관이 여럿(슈퍼관리자)일 수 있어 첫 부스의 기관을 대표로 쓴다.
-        audit(p, "booth.batch_status", None,
-              f"부스 {len(booths)}개 {'운영 시작' if active else '운영 중지'}",
-              org_id=booths[0]["org_id"],
-              detail={"booth_ids": [b["id"] for b in booths], "is_active": active})
+        by_org: dict[int, list[int]] = {}
+        for b in booths:  # 기관이 여럿(슈퍼관리자)일 수 있어 소유 기관마다 감사 1건
+            by_org.setdefault(b["org_id"], []).append(b["id"])
+        for org_id, bids in by_org.items():
+            audit(p, "booth.batch_status", None,
+                  f"부스 {len(bids)}개 {'운영 시작' if active else '운영 중지'}",
+                  org_id=org_id, detail={"booth_ids": bids, "is_active": active})
     return jsonify(updated=len(booths))
 
 

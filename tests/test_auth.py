@@ -87,3 +87,11 @@ def test_login_and_password_change_are_audited(client, db, make_org, make_user, 
     rows = db.execute("SELECT action, org_id, actor_label FROM audit_log ORDER BY id").fetchall()
     assert [(r["action"], r["org_id"]) for r in rows] == [("auth.login", org), ("auth.password_change", org)]
     assert rows[0]["actor_label"] == "hong(hong)"
+
+
+def test_password_wrong_current_is_422_not_401(client, make_org, make_user, login_as, api):
+    make_user("hong", org_id=make_org()); login_as(client, "hong")
+    r = api(client, "POST", "/api/admin/auth/password", json={"current": "nope", "new": "newpass99"})
+    assert r.status_code == 422 and r.json["error"] == "invalid"
+    assert r.json["fields"] == {"current": "현재 비밀번호가 일치하지 않습니다."}
+    assert client.get("/api/admin/auth/me").status_code == 200

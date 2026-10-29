@@ -118,3 +118,52 @@ def test_batch_status_all_or_nothing(client, db, make_org, make_user, login_as, 
     r = api(client, "POST", "/api/admin/booths/batch-status", json={"booth_ids": [mine, other], "is_active": False})
     assert r.status_code == 404
     assert db.execute("SELECT is_active FROM booths WHERE id=?", (mine,)).fetchone()[0] == 1
+
+
+def _linked_setup(db, make_org, make_user, login_as, client, make_event, make_booth):
+    host, me = make_org(name="재단"), make_org(name="나름")
+    ev = make_event(host)
+    pid = db.execute("INSERT INTO partners (event_id,name,linked_org_id,access_token,created_at) VALUES (?,?,?,?,0)",
+                     (ev, "나름", me, "t")).lastrowid
+    partner_booth = make_booth(ev, partner_id=pid)
+    own_booth = make_booth(make_event(me))
+    make_user("kim", org_id=me); login_as(client, "kim")
+    return host, me, own_booth, partner_booth
+
+
+def test_export_audited_in_every_owning_org(client, db, make_org, make_user, login_as, api, make_event, make_booth):
+    import json
+    host, me, own, partner = _linked_setup(db, make_org, make_user, login_as, client, make_event, make_booth)
+    assert api(client, "POST", "/api/admin/export", json={"booth_ids": [own, partner]}).status_code == 200
+    rows = db.execute("SELECT org_id, detail FROM audit_log WHERE action='export'").fetchall()
+    by_org = {r["org_id"]: json.loads(r["detail"])["booth_ids"] for r in rows}
+    assert by_org == {me: [own], host: [partner]}
+
+
+def test_batch_status_audited_in_every_owning_org(client, db, make_org, make_user, login_as, api, make_event, make_booth):
+    import json
+    host, me, own, partner = _linked_setup(db, make_org, make_user, login_as, client, make_event, make_booth)
+    # 연계 단체는 own 권한이 없으므로 배치는 슈퍼관리자로
+    make_user("root", superadmin=True)
+    c2 = client.application.test_client(); login_as(c2, "root")
+    r = api(c2, "POST", "/api/admin/booths/batch-status", json={"booth_ids": [own, partner], "is_active": False})
+    assert r.status_code == 200
+    rows = db.execute("SELECT org_id, detail FROM audit_log WHERE action='booth.batch_status'").fetchall()
+    assert {r["org_id"]: json.loads(r["detail"])["booth_ids"] for r in rows} == {me: [own], host: [partner]}
+
+
+def test_toggle_flips_atomically(client, db, make_org, make_user, login_as, api, make_event, make_booth):
+    import json
+    org = make_org(); make_user("hong", org_id=org); login_as(client, "hong")
+    b = make_booth(make_event(org))
+    from app.access import load_booth
+    from app.booth_ops import toggle
+    from app.principal import Principal
+    with client.application.app_context():
+        stale = load_booth(b)
+    db.execute("UPDATE booths SET is_active = 0 WHERE id=?", (b,))  # 다른 요청이 먼저 끔
+    with client.application.app_context():
+        assert toggle(Principal(kind="user", label="x", user_id=None, org_id=org, is_superadmin=False), stale) is True
+    assert db.execute("SELECT is_active FROM booths WHERE id=?", (b,)).fetchone()[0] == 1
+    d = db.execute("SELECT detail FROM audit_log WHERE action='booth.toggle'").fetchone()[0]
+    assert json.loads(d) == {"is_active": True}
