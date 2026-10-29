@@ -134,8 +134,9 @@ def update_event(event_id: int):
         detail["notice"] = {"from": ev["notice"], "to": notice}
     with tx() as conn:
         conn.execute("UPDATE events SET name = ?, notice = ? WHERE id = ?", (name, notice, event_id))
-        audit(current_principal(), "event.update", f"event:{event_id}",
-              f"행사 수정: {name}", org_id=ev["org_id"], detail=detail)
+        if detail:
+            audit(current_principal(), "event.update", f"event:{event_id}",
+                  f"행사 수정: {name}", org_id=ev["org_id"], detail=detail)
     return jsonify(event=_load_event(event_id))
 
 
@@ -152,6 +153,7 @@ def delete_event(event_id: int):
         audit(current_principal(), "event.delete", f"event:{event_id}",
               f"행사 삭제: {ev['name']}", org_id=ev["org_id"],
               detail={"booth_count": booths, "reservation_count": resv})
+    assets.release(ev["logo"])
     return "", 204
 
 

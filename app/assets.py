@@ -42,18 +42,18 @@ def store(data: bytes) -> str:
     d = _dir()
     d.mkdir(parents=True, exist_ok=True)
     target = d / name
-    if not target.exists():
-        fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
+    # 이미 있어도 항상 다시 쓴다(동일 내용): 동시 release 가 파일을 지워도 store 후엔 존재하도록.
+    fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp, target)
+    except BaseException:
         try:
-            with os.fdopen(fd, "wb") as f:
-                f.write(data)
-            os.replace(tmp, target)
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return name
 
 

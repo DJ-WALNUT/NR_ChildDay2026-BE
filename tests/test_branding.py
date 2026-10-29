@@ -12,6 +12,7 @@ def test_org_logo_roundtrip(client, make_org, make_user, login_as, api):
     g = client.get(r.json["logo_url"])
     assert g.status_code == 200 and g.data == PNG and g.headers["Content-Type"] == "image/png"
     assert g.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+    assert g.headers["Content-Security-Policy"] == "default-src 'none'; sandbox"
     assert api(client, "DELETE", f"/api/admin/orgs/{org}/logo").status_code == 204
     assert client.get(r.json["logo_url"]).status_code == 404
 
@@ -68,6 +69,25 @@ def test_event_update_audit_detail_only_changed(client, db, make_org, make_user,
     api(client, "PATCH", f"/api/admin/events/{ev}", json={"notice": "안내"})
     d = db.execute("SELECT detail FROM audit_log WHERE action='event.update'").fetchone()[0]
     assert json.loads(d) == {"notice": {"from": None, "to": "안내"}}
+
+def test_event_update_noop_writes_no_audit(client, db, make_org, make_user, login_as, api, make_event):
+    org = make_org(); ev = make_event(org); make_user("hong", org_id=org); login_as(client, "hong")
+    name = db.execute("SELECT name FROM events WHERE id=?", (ev,)).fetchone()[0]
+    assert api(client, "PATCH", f"/api/admin/events/{ev}", json={"name": name}).status_code == 200
+    assert db.execute("SELECT COUNT(*) FROM audit_log WHERE action='event.update'").fetchone()[0] == 0
+
+def test_event_delete_releases_logo(client, make_org, make_user, login_as, api, make_event):
+    org = make_org(); ev = make_event(org); make_user("hong", org_id=org); login_as(client, "hong")
+    u = up(api, client, f"/api/admin/events/{ev}/logo", PNG).json["logo_url"]
+    assert api(client, "DELETE", f"/api/admin/events/{ev}").status_code == 204
+    assert client.get(u).status_code == 404
+
+def test_event_delete_keeps_shared_logo(client, make_org, make_user, login_as, api, make_event):
+    org = make_org(); ev = make_event(org); make_user("hong", org_id=org); login_as(client, "hong")
+    u = up(api, client, f"/api/admin/orgs/{org}/logo", PNG).json["logo_url"]
+    up(api, client, f"/api/admin/events/{ev}/logo", PNG)
+    assert api(client, "DELETE", f"/api/admin/events/{ev}").status_code == 204
+    assert client.get(u).status_code == 200
 
 def test_public_payloads_carry_branding(client, make_org, make_user, login_as, api, make_event, make_booth):
     org = make_org(slug="nareum"); ev = make_event(org); b = make_booth(ev)

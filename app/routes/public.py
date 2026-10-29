@@ -31,6 +31,7 @@ def get_asset(name: str):
         raise ApiError(404, "not_found")
     resp = Response(data, mimetype=assets.CONTENT_TYPES[name.rsplit(".", 1)[1]])
     resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    resp.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
     return resp
 
 
