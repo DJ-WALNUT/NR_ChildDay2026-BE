@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import sqlite3
 
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 
-from ..access import load_booth, require_booth, require_event
-from ..audit import audit
+from .. import timeutil
+from ..access import BOOTH_SQL, load_booth, require_booth, require_event, require_org
+from ..audit import audit, list_audit
 from ..auth import login_required
 from ..booth_ops import (DEFAULTS, SETTING_FIELDS, apply_settings, booth_json, clear_reservations,
                          delete_reservation, export, list_reservations, parse_booth_ids, parse_stats_mode, set_status,
@@ -264,3 +265,67 @@ def export_route():
     for i in ids:
         require_booth(i, "manage")
     return jsonify(export(current_principal(), ids))
+
+
+def int_param(name: str, default: int | None = None) -> int | None:
+    raw = request.args.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise ValidationError({name: "정수여야 합니다."}) from None
+
+
+def audit_query(org_id: int | None) -> dict:
+    return list_audit(org_id=org_id, before=int_param("before"), limit=int_param("limit", 50),
+                      action=request.args.get("action") or None)
+
+
+def _booths_of(event_id: int, partner_id: int | None = None) -> list[dict]:
+    sql, args = BOOTH_SQL + " WHERE b.event_id = ?", [event_id]
+    if partner_id is not None:
+        sql += " AND b.partner_id = ?"
+        args.append(partner_id)
+    rows = get_db().execute(sql + " ORDER BY b.created_at DESC, b.id DESC", args).fetchall()
+    return [booth_json(r) for r in rows]
+
+
+@bp.get("/orgs/<int:org_id>/overview")
+@login_required
+def overview(org_id: int):
+    org = require_org(org_id)
+    db = get_db()
+    owned, linked = [], []
+    for e in db.execute("SELECT id, name FROM events WHERE org_id = ? ORDER BY created_at DESC, id DESC",
+                        (org_id,)).fetchall():
+        owned.append({"event": {"id": e["id"], "name": e["name"]}, "booths": _booths_of(e["id"])})
+    for p in db.execute(
+            "SELECT p.id, p.name, e.id AS event_id, e.name AS event_name, o.id AS host_id, o.name AS host_name "
+            "FROM partners p JOIN events e ON e.id = p.event_id JOIN organizations o ON o.id = e.org_id "
+            "WHERE p.linked_org_id = ? AND o.is_active = 1 ORDER BY e.created_at DESC, p.id DESC",
+            (org_id,)).fetchall():
+        linked.append({"partner": {"id": p["id"], "name": p["name"]},
+                       "event": {"id": p["event_id"], "name": p["event_name"]},
+                       "host": {"id": p["host_id"], "name": p["host_name"]},
+                       "booths": _booths_of(p["event_id"], p["id"])})
+    booths = [b for g in (*owned, *linked) for b in g["booths"]]
+    ids = [b["id"] for b in booths]
+    today = timeutil.kst_date(timeutil.now())
+    n_today = 0
+    if ids:
+        marks = ",".join("?" for _ in ids)
+        n_today = sum(1 for r in db.execute(
+            f"SELECT created_at FROM reservations WHERE booth_id IN ({marks}) AND status != 'noshow'", ids)
+            if timeutil.kst_date(r["created_at"]) == today)
+    return jsonify(
+        org={"id": org["id"], "name": org["name"], "slug": org["slug"]}, owned=owned, linked=linked,
+        totals={"today": n_today, "total": sum(b["count"] for b in booths),
+                "active_booths": sum(1 for b in booths if b["is_active"]), "booths": len(booths)})
+
+
+@bp.get("/orgs/<int:org_id>/audit")
+@login_required
+def org_audit(org_id: int):
+    require_org(org_id)
+    return jsonify(audit_query(org_id))

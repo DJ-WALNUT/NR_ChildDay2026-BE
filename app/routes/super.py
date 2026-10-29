@@ -18,6 +18,7 @@ from ..db import get_db, tx
 from ..errors import ValidationError, conflict, not_found
 from ..principal import current_principal
 from ..timeutil import KST, now
+from .admin_booths import audit_query, int_param
 from .common import json_body
 
 bp = Blueprint("super", __name__, url_prefix="/api/admin/super")
@@ -144,3 +145,9 @@ def backup():
     name = f"nrbooth-backup-{datetime.now(KST):%Y%m%d-%H%M}.db"
     return send_file(io.BytesIO(data), mimetype="application/octet-stream",
                      as_attachment=True, download_name=name)
+
+
+@bp.get("/audit")
+@superadmin_required
+def audit_log():
+    return jsonify(audit_query(int_param("org_id")))
