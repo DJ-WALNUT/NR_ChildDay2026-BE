@@ -51,3 +51,21 @@ def test_patch_slug_validation_and_audit(client, make_org, make_user, login_as, 
     r = api(client, "PATCH", f"/api/admin/super/orgs/{a}", json={"slug": "ccc", "is_active": False})
     assert r.json["org"]["slug"] == "ccc" and r.json["org"]["is_active"] is False
     assert db.execute("SELECT COUNT(*) FROM audit_log WHERE action='org.update'").fetchone()[0] == 1
+
+def test_slug_rejects_trailing_newline(client, make_org, make_user, login_as, api):
+    org = make_org("A", "aaa")
+    make_user("root", superadmin=True); login_as(client, "root")
+    assert api(client, "POST", "/api/admin/super/orgs", json={"name": "x", "slug": "abc\n"}).status_code == 422
+    assert api(client, "PATCH", f"/api/admin/super/orgs/{org}", json={"slug": "abc\n"}).status_code == 422
+
+def test_backup_contains_data_and_forbidden_for_owner(app, client, make_org, make_user, login_as, api, tmp_path):
+    import sqlite3
+    make_user("root", superadmin=True); login_as(client, "root")
+    r = api(client, "GET", "/api/admin/super/backup")
+    f = tmp_path / "b.db"; f.write_bytes(r.data)
+    c = sqlite3.connect(str(f))
+    assert c.execute("SELECT COUNT(*) FROM users WHERE username='root'").fetchone()[0] == 1
+    c.close()
+    other = app.test_client()
+    make_user("hong", org_id=make_org()); login_as(other, "hong")
+    assert api(other, "GET", "/api/admin/super/backup").status_code == 403

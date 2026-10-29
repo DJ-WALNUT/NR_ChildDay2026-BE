@@ -61,7 +61,7 @@ def normalize_username(s: str) -> str:
 
 
 def valid_username(s: str) -> bool:
-    return bool(_USERNAME_RE.match(s))
+    return bool(_USERNAME_RE.fullmatch(s))
 
 
 def password_problem(pw: str, username: str) -> str | None:

@@ -33,3 +33,8 @@ def test_guard_raises_after_limit(app):
         with pytest.raises(ApiError) as e:
             guard("k", 3, 60)
         assert e.value.status == 429
+
+
+def test_valid_username_rejects_trailing_newline():
+    from app.security import valid_username
+    assert not valid_username("abc\n")

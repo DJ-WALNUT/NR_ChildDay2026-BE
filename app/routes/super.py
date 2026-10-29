@@ -42,7 +42,7 @@ def _name(v) -> str:
 
 
 def _slug(v) -> str:
-    if not isinstance(v, str) or not _SLUG_RE.match(v) or v in _RESERVED:
+    if not isinstance(v, str) or not _SLUG_RE.fullmatch(v) or v in _RESERVED:
         raise ValidationError({"slug": "영문 소문자·숫자·하이픈 2~32자로 입력하세요(예약어 불가)."})
     return v
 
@@ -125,10 +125,11 @@ def update_org(org_id: int):
 @superadmin_required
 def backup():
     """온라인 백업 API 로 일관된 사본을 임시 파일에 만들어 메모리로 읽은 뒤 파일은 바로 지운다."""
-    src = sqlite3.connect(str(Path(current_app.config["DATA_DIR"]) / "app.db"), timeout=10)
     fd, tmp = tempfile.mkstemp(suffix=".db")
     os.close(fd)
+    src = None
     try:
+        src = sqlite3.connect(str(Path(current_app.config["DATA_DIR"]) / "app.db"), timeout=10)
         dst = sqlite3.connect(tmp)
         try:
             src.backup(dst)
@@ -136,7 +137,8 @@ def backup():
             dst.close()
         data = Path(tmp).read_bytes()
     finally:
-        src.close()
+        if src is not None:
+            src.close()
         os.unlink(tmp)
     audit(current_principal(), "backup.download", None, "데이터베이스 백업 다운로드", org_id=None)
     name = f"nrbooth-backup-{datetime.now(KST):%Y%m%d-%H%M}.db"
