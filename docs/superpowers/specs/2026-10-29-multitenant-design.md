@@ -167,9 +167,21 @@ CREATE TABLE reservations (
 );
 CREATE INDEX idx_res_booth_slot ON reservations(booth_id, slot);
 
-CREATE TABLE audit_log (id INTEGER PRIMARY KEY, org_id INTEGER, user_id INTEGER,
+CREATE TABLE audit_log (
+  id INTEGER PRIMARY KEY,
+  org_id INTEGER,                     -- 대상의 소유 기관 (기관 생성 등 전역 작업은 NULL)
+  actor_org_id INTEGER,               -- 행위자 계정의 기관 (링크·슈퍼관리자는 NULL)
+  user_id INTEGER,                    -- 계정 행위일 때
   actor TEXT NOT NULL,                -- 'user' | 'booth_link' | 'partner_link' | 'system'
-  action TEXT NOT NULL, target TEXT, detail TEXT, at REAL NOT NULL);
+  actor_label TEXT NOT NULL,          -- 기록 시점의 표시 이름 (예: '홍길동(hong)', '부스 링크: 페이스페인팅')
+  action TEXT NOT NULL,               -- 예: 'booth.update'
+  target TEXT,                        -- 예: 'booth:12'
+  summary TEXT NOT NULL,              -- 사람이 읽는 한 줄 (예: '페이스페인팅 정원 100 → 120')
+  detail TEXT,                        -- JSON (변경 전후 값 등)
+  at REAL NOT NULL
+);
+CREATE INDEX idx_audit_org_at ON audit_log(org_id, at);
+CREATE INDEX idx_audit_actor_org_at ON audit_log(actor_org_id, at);
 CREATE TABLE rate_events (key TEXT NOT NULL, at REAL NOT NULL);
 CREATE INDEX idx_rate_events ON rate_events(key, at);
 ```
@@ -261,6 +273,27 @@ walnutphoto(`server/app/auth.py`, `security.py`, `ratelimit.py`)의 구현을 �
   같은 사이트이므로 Lax 쿠키가 `credentials: 'include'` 요청에 전송된다.
   CORS는 `CORS_ORIGINS` 목록만 허용, `supports_credentials=True`, 허용 헤더 `Content-Type, X-CSRF-Token`.
 
+### 감사 로그
+
+기록 대상(같은 트랜잭션 안에서 기록):
+
+| 분류 | action |
+|---|---|
+| 계정 | `auth.login`, `auth.password_change`, `user.create`, `user.update`, `user.reset_password`, `user.deactivate`, `user.activate` |
+| 기관 | `org.create`, `org.update`(슈퍼관리자) |
+| 행사·운영 단체 | `event.create`, `event.update`, `event.delete`, `partner.create`, `partner.update`, `partner.delete`, `partner.rotate_token` |
+| 부스 | `booth.create`, `booth.bulk_create`, `booth.update`, `booth.move`, `booth.delete`, `booth.toggle`, `booth.batch_status`, `booth.rotate_token` |
+| 명단 | `reservation.delete`, `reservation.clear`(초기화), `export` |
+| 기타 | `backup.download` |
+
+- 신청 접수, 방문객 취소, 노쇼·체험완료 같은 상태 변경은 건수가 많고 현장 작업이라 기록하지 않는다.
+  (명단 자체에 상태가 남는다.)
+- 로그인 실패는 기록하지 않는다(제한 테이블로 처리).
+- 기관 계정이 보는 범위: `org_id = 내 기관` 또는 `actor_org_id = 내 기관`.
+  즉 내 기관 행사에서 일어난 일(링크·연결 기관 작업 포함)과 내 계정들이 다른 기관 부스에서 한 일.
+- 슈퍼관리자는 전체를 본다.
+- 보존 기간 제한은 두지 않는다(건수가 적다).
+
 ### 제한
 
 | 키 | 한도 |
@@ -321,6 +354,7 @@ walnutphoto(`server/app/auth.py`, `security.py`, `ratelimit.py`)의 구현을 �
 | DELETE | `/booths/<id>/reservations` | manage (초기화) |
 | POST | `/stats` | `{booth_ids, mode}` — 모든 부스에 manage 필요 |
 | POST | `/export` | `{booth_ids}` → `{booths:[{event_name, booth_name, rows:[{slot,name,gender,age_group,code,status,created_at}]}]}` |
+| GET | `/orgs/<org>/audit` | require_org. `?before=<id>&limit=50(최대 200)&action=<접두사>` → `{items:[{id, at, actor, actor_label, action, target, summary, detail}], next_before}` 최신순 |
 
 ### 7.4 링크 `/api/link`
 
@@ -338,7 +372,8 @@ walnutphoto(`server/app/auth.py`, `security.py`, `ratelimit.py`)의 구현을 �
 
 ### 7.5 슈퍼관리자 `/api/admin/super`
 
-`GET/POST /orgs` · `PATCH /orgs/<id>` `{name?, slug?, is_active?}` · `GET /backup`(일관된 DB 사본 다운로드).
+`GET/POST /orgs` · `PATCH /orgs/<id>` `{name?, slug?, is_active?}` · `GET /backup`(일관된 DB 사본 다운로드) ·
+`GET /audit`(전체 감사 로그, 7.3과 같은 쿼리 파라미터 + `org_id` 필터).
 기관 계정 관리는 7.3을 사용한다(슈퍼관리자는 require_org 통과).
 
 ### 7.6 보안 헤더
@@ -382,6 +417,8 @@ walnutphoto(`server/app/auth.py`, `security.py`, `ratelimit.py`)의 구현을 �
 - 연결 기관: 관리 작업 허용, 소유 작업 403, 연결 해제 후 404.
 - 정원: 스레드 동시 신청에서 초과 없음, 노쇼 처리 후 자리 회복, 대기자 접수, 마감 거절, 중복 거절.
 - 방문객: 조회·취소는 본인만, 다른 사람 정보 미노출, 조회 제한 429.
+- 감사 로그: 기록 대상 작업이 로그를 남기는지, 기관 계정이 다른 기관 로그를 볼 수 없는지,
+  연결 기관 계정의 작업이 소유 기관과 행위자 기관 양쪽에 보이는지.
 - 인증: 로그인 실패 제한, 비활성 계정 거부, 비밀번호 변경 의무, 초기화 시 세션 폐기,
   마지막 활성 계정 보호, CSRF 누락 403.
 - 이관: 기존 스키마로 만든 작은 DB를 이관해 매핑·정리·건수를 검증한다.
@@ -392,7 +429,7 @@ walnutphoto(`server/app/auth.py`, `security.py`, `ratelimit.py`)의 구현을 �
   기존 `/reserve/:id`, `/check/:id`는 `/booths/<id>/home`으로 slug를 얻어 리다이렉트.
   확인 화면은 lookup/cancel API 사용.
 - 관리: `/manage/login`, 비밀번호 변경 강제 화면, 대시보드(소유 행사 + 참가한 연합 행사),
-  행사·운영 단체·부스·명단·합계실적·운영마감, 계정 관리, 슈퍼관리자.
+  행사·운영 단체·부스·명단·합계실적·운영마감, 계정 관리, 활동 기록(감사 로그) 열람, 슈퍼관리자.
 - 링크: `/b/:token`(부스 관리), `/p/:token`(운영 단체 실적과 부스 관리).
 - QR·링크 엑셀은 새 링크 기준으로 생성.
 - API 클라이언트: `credentials: 'include'`, CSRF 헤더, 401 시 로그인 이동.
@@ -400,4 +437,4 @@ walnutphoto(`server/app/auth.py`, `security.py`, `ratelimit.py`)의 구현을 �
 ## 12. 범위 밖
 
 이메일 발송, 공개 가입, 계정의 다중 기관 소속, 역할 구분, 대기자 자동 승급과 알림,
-감사 로그 열람 화면, 기관별 저장 용량 제한.
+기관별 저장 용량 제한, 감사 로그 보존 기간 관리.
