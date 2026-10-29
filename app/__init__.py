@@ -26,6 +26,7 @@ def _is_api(path: str) -> bool:
 def create_app(overrides: dict | None = None) -> Flask:
     app = Flask(__name__)
     app.config.from_object(Config)
+    app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024  # 로고 1MB + multipart 여유
     app.config.update(overrides or {})  # overrides 가 환경변수보다 우선
 
     data_dir = Path(app.config["DATA_DIR"])
@@ -41,7 +42,7 @@ def create_app(overrides: dict | None = None) -> Flask:
 
     origins = [o.strip() for o in str(app.config["CORS_ORIGINS"]).split(",") if o.strip()]
     CORS(app, resources={r"/api/*": {"origins": origins}}, supports_credentials=True,
-         allow_headers=["Content-Type", "X-CSRF-Token"], methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"])
+         allow_headers=["Content-Type", "X-CSRF-Token"], methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
 
     app.teardown_appcontext(close_db)
     init_auth(app)
@@ -65,6 +66,7 @@ def create_app(overrides: dict | None = None) -> Flask:
         return handler
 
     app.register_error_handler(404, _json_error("not_found", 404))
+    app.register_error_handler(413, _json_error("file_too_large", 413))
     app.register_error_handler(405, _json_error("method_not_allowed", 405))
 
     @app.after_request

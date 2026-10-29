@@ -28,6 +28,10 @@ CASES = {
     "admin_events.list_partners": ("GET", lambda i: f"/api/admin/events/{i['event']}/partners", None),
     "admin_events.create_partner": (
         "POST", lambda i: f"/api/admin/events/{i['event']}/partners", lambda i: {"name": "x"}),
+    "assets_admin.put_org_logo": ("PUT", lambda i: f"/api/admin/orgs/{i['org']}/logo", lambda i: {}),
+    "assets_admin.delete_org_logo": ("DELETE", lambda i: f"/api/admin/orgs/{i['org']}/logo", None),
+    "assets_admin.put_event_logo": ("PUT", lambda i: f"/api/admin/events/{i['event']}/logo", lambda i: {}),
+    "assets_admin.delete_event_logo": ("DELETE", lambda i: f"/api/admin/events/{i['event']}/logo", None),
     "admin_booths.export_route": (
         "POST", lambda i: "/api/admin/export", lambda i: {"booth_ids": [i["booth"]]}),
     "admin_booths.org_audit": ("GET", lambda i: f"/api/admin/orgs/{i['org']}/audit", None),

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import re
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
+
+from .. import assets
 
 from ..access import load_booth
 from ..booth_ops import AGE_GROUPS, GENDERS
@@ -16,6 +18,20 @@ from ..timeutil import now
 from .common import json_body
 
 bp = Blueprint("public", __name__, url_prefix="/api/public")
+
+
+@bp.get("/assets/<name>")
+def get_asset(name: str):
+    p = assets.path_for(name)
+    if p is None:
+        raise ApiError(404, "not_found")
+    try:
+        data = p.read_bytes()  # 파일 핸들을 열어 두지 않는다(Windows 에서 삭제가 막힘)
+    except OSError:
+        raise ApiError(404, "not_found")
+    resp = Response(data, mimetype=assets.CONTENT_TYPES[name.rsplit(".", 1)[1]])
+    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return resp
 
 
 def normalize_name(s) -> str:
