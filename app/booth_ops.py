@@ -156,7 +156,7 @@ def _own_reservation(booth: sqlite3.Row, rid: int) -> sqlite3.Row:
 
 
 def set_status(p: Principal, booth: sqlite3.Row, rid: int, status: str) -> dict:
-    if status not in STATUSES:
+    if not isinstance(status, str) or status not in STATUSES:
         raise ValidationError({"status": "올바르지 않은 상태입니다."})
     r = _own_reservation(booth, rid)
     with tx() as conn:
@@ -195,6 +195,19 @@ def parse_booth_ids(body) -> list[int]:
             or not all(_is_int(i) for i in ids)):
         raise ValidationError({"booth_ids": f"부스 ID {MAX_BOOTHS}개 이하의 목록이 필요합니다."})
     return list(dict.fromkeys(ids))
+
+
+def parse_stats_mode(body) -> Literal["simple", "strict"]:
+    mode = body.get("mode", "simple")
+    if mode not in ("simple", "strict"):
+        raise ValidationError({"mode": "simple 또는 strict 여야 합니다."})
+    return mode
+
+
+def partner_booth_ids(partner_id: int) -> list[int]:
+    rows = get_db().execute("SELECT id FROM booths WHERE partner_id = ? ORDER BY name, id",
+                            (partner_id,)).fetchall()
+    return [r["id"] for r in rows]
 
 
 def stats(booth_ids: list[int], mode: Literal["simple", "strict"]) -> dict:

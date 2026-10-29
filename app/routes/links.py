@@ -6,9 +6,10 @@ from flask import Blueprint, jsonify
 
 from ..access import require_booth, resolve_booth_link, resolve_partner_link
 from ..booth_ops import (SETTING_FIELDS, booth_json, clear_reservations, delete_reservation, export,
-                         list_reservations, parse_booth_ids, set_status, stats, toggle, update_settings)
+                         list_reservations, parse_booth_ids, parse_stats_mode, partner_booth_ids,
+                         set_status, stats, toggle, update_settings)
 from ..db import get_db
-from ..errors import ValidationError, forbidden
+from ..errors import forbidden
 from .common import json_body
 
 bp = Blueprint("links", __name__, url_prefix="/api/link")
@@ -36,10 +37,7 @@ def _list_res(p, booth):
 
 
 def _patch_res(p, booth, rid):
-    status = json_body().get("status")
-    if not isinstance(status, str):
-        raise ValidationError({"status": "올바르지 않은 상태입니다."})
-    return jsonify(set_status(p, booth, rid, status))
+    return jsonify(set_status(p, booth, rid, json_body().get("status")))
 
 
 def _delete_res(p, booth, rid):
@@ -49,13 +47,6 @@ def _delete_res(p, booth, rid):
 
 def _clear(p, booth):
     return jsonify(deleted=clear_reservations(p, booth))
-
-
-def _stats_mode(body) -> str:
-    mode = body.get("mode", "simple")
-    if mode not in ("simple", "strict"):
-        raise ValidationError({"mode": "simple 또는 strict 여야 합니다."})
-    return mode
 
 
 # ---- 부스 링크 ----
@@ -116,8 +107,7 @@ def _scoped_ids(p, body) -> list[int]:
     if "booth_ids" in body:
         ids = parse_booth_ids(body)
     else:
-        ids = [r["id"] for r in get_db().execute(
-            "SELECT id FROM booths WHERE partner_id = ? ORDER BY name, id", (p.partner_id,))]
+        ids = partner_booth_ids(p.partner_id)
     for i in ids:
         require_booth(i, "manage", p)
     return ids
@@ -128,19 +118,17 @@ def partner_get(token):
     p, partner = resolve_partner_link(token)
     db = get_db()
     slug = db.execute("SELECT slug FROM organizations WHERE id = ?", (partner["org_id"],)).fetchone()[0]
-    rows = db.execute("SELECT id FROM booths WHERE partner_id = ? ORDER BY name, id",
-                      (partner["id"],)).fetchall()
     return jsonify(partner={"id": partner["id"], "name": partner["name"]},
                    event={"id": partner["event_id"], "name": partner["event_name"]},
                    org={"name": partner["org_name"], "slug": slug},
-                   booths=[booth_json(require_booth(r["id"], "manage", p)) for r in rows])
+                   booths=[booth_json(require_booth(i, "manage", p)) for i in partner_booth_ids(partner["id"])])
 
 
 @bp.post("/partner/<token>/stats")
 def partner_stats(token):
     p, _ = resolve_partner_link(token)
     body = json_body()
-    mode = _stats_mode(body)
+    mode = parse_stats_mode(body)
     return jsonify(stats(_scoped_ids(p, body), mode))
 
 

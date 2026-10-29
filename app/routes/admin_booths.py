@@ -10,7 +10,7 @@ from ..access import load_booth, require_booth, require_event
 from ..audit import audit
 from ..auth import login_required
 from ..booth_ops import (DEFAULTS, SETTING_FIELDS, apply_settings, booth_json, clear_reservations,
-                         delete_reservation, export, list_reservations, parse_booth_ids, set_status,
+                         delete_reservation, export, list_reservations, parse_booth_ids, parse_stats_mode, set_status,
                          stats, toggle, validate_settings)
 from ..db import get_db, tx
 from ..errors import ValidationError, not_found
@@ -229,10 +229,7 @@ def _reservation_booth(rid: int) -> sqlite3.Row:
 def patch_reservation(rid: int):
     body = json_body()
     booth = _reservation_booth(rid)
-    status = body.get("status")
-    if not isinstance(status, str):
-        raise ValidationError({"status": "올바르지 않은 상태입니다."})
-    return jsonify(set_status(current_principal(), booth, rid, status))
+    return jsonify(set_status(current_principal(), booth, rid, body.get("status")))
 
 
 @bp.delete("/reservations/<int:rid>")
@@ -254,9 +251,7 @@ def clear_booth_reservations(booth_id: int):
 def stats_route():
     body = json_body()
     ids = parse_booth_ids(body)
-    mode = body.get("mode", "simple")
-    if mode not in ("simple", "strict"):
-        raise ValidationError({"mode": "simple 또는 strict 여야 합니다."})
+    mode = parse_stats_mode(body)
     for i in ids:
         require_booth(i, "manage")
     return jsonify(stats(ids, mode))

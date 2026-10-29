@@ -75,3 +75,16 @@ def test_booth_link_wins_over_session_cookie(client, db, make_org, make_event, m
     assert r.status_code == 200
     row = db.execute("SELECT actor FROM audit_log WHERE action='booth.toggle'").fetchone()
     assert row[0] == "booth_link"
+
+def test_partner_link_ignores_superadmin_session_for_scope(client, db, make_org, make_event, make_booth, make_user, login_as):
+    s = _setup(db, make_org, make_event, make_booth)
+    make_user("root", superadmin=True); login_as(client, "root")
+    r = client.post("/api/link/partner/PTOKEN/stats", json={"booth_ids": [s["free"]], "mode": "simple"})
+    assert r.status_code == 404
+
+def test_partner_link_other_booth_reservation_404(client, db, make_org, make_event, make_booth, make_reservation):
+    s = _setup(db, make_org, make_event, make_booth)
+    other = make_reservation(s["free"], "나")
+    base = f"/api/link/partner/PTOKEN/booths/{s['mine']}/reservations/{other}"
+    assert client.patch(base, json={"status": "noshow"}).status_code == 404
+    assert client.delete(base).status_code == 404
