@@ -10,7 +10,10 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import Config
 from .db import close_db, migrate
+from .auth import init_auth
+from .cli import init_cli
 from .errors import ApiError
+from .routes import register_blueprints
 
 
 def _is_api(path: str) -> bool:
@@ -34,6 +37,9 @@ def create_app(overrides: dict | None = None) -> Flask:
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=hops, x_proto=hops, x_host=hops)
 
     app.teardown_appcontext(close_db)
+    init_auth(app)
+    init_cli(app)
+    register_blueprints(app)
 
     @app.get("/api/health")
     def health():
