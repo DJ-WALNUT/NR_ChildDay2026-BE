@@ -75,9 +75,12 @@ def world(app, make_org, make_user, make_event, make_booth, make_reservation, lo
 
 
 @pytest.mark.parametrize("name", sorted(CASES))
-def test_other_org_is_404(client, api, world, name):
+def test_other_org_is_404(app, client, api, world, name):
     method, url, body = CASES[name]
-    r = api(client, method, url(world), json=body(world) if body else None)
+    path = url(world)
+    endpoint, _ = app.url_map.bind("localhost").match(path, method=method)
+    assert endpoint == name  # 404 가 "라우팅 실패"가 아니라 "범위 밖"임을 보장
+    r = api(client, method, path, json=body(world) if body else None)
     assert r.status_code == 404, (name, r.status_code, r.get_data(as_text=True))
 
 
@@ -95,5 +98,7 @@ def test_every_super_endpoint_forbids_owner(app, client, api, make_org, make_use
     for rule in rules:
         url = rule.rule.replace("<int:org_id>", "1")
         for method in sorted(rule.methods - {"HEAD", "OPTIONS"}):
+            endpoint, _ = app.url_map.bind("localhost").match(url, method=method)
+            assert endpoint == rule.endpoint
             r = api(client, method, url, json={} if method != "GET" else None)
             assert r.status_code == 403, (rule.endpoint, method, r.status_code)
