@@ -307,73 +307,108 @@ walnutphoto(`server/app/auth.py`, `security.py`, `ratelimit.py`)의 구현을 �
 
 ## 7. API
 
-오류 형식: `{ "error": "<code>", "fields": { ... } }`. 주요 코드: `unauthorized`(401), `csrf`(403),
-`forbidden`(403), `password_change_required`(403), `not_found`(404), `full`·`closed`·`duplicate`·
-`last_active_user`·`slug_taken`·`username_taken`(409), `invalid`(422), `rate_limited`(429).
+오류 형식: `{ "error": "<code>", "fields": { ... } }` (`fields`는 `invalid`일 때만). 코드와 상태:
+
+| 상태 | 코드 |
+|---|---|
+| 401 | `unauthorized`(세션 없음·만료 — 프론트는 로그인 화면으로), `invalid_credentials`(로그인 실패 전용) |
+| 403 | `csrf`, `forbidden`, `password_change_required` |
+| 404 | `not_found` |
+| 405 | `method_not_allowed` |
+| 409 | `full`(정원 마감), `closed`(부스 마감), `duplicate`(같은 이름+식별번호 신청 중복), `not_cancellable`(`noshow`·`completed` 취소), `cannot_deactivate_self`, `use_password_change`(자기 비밀번호 초기화 시도), `last_active_user`(기관의 마지막 활성 계정 비활성화), `username_taken`, `slug_taken` |
+| 422 | `invalid` + `fields:{<필드>:<메시지>}` |
+| 429 | `rate_limited` |
+
+`POST /api/admin/auth/password`에서 현재 비밀번호가 틀리면 401이 아니라 **`422 invalid`, `fields:{current:"현재 비밀번호가 일치하지 않습니다."}`**
+(프론트가 401을 "세션 끊김"으로 처리하기 때문). 이 요청도 로그인과 같은 시도 제한(`login:{username}:{ip}`)을 쓴다.
 
 ### 7.1 방문객 `/api/public`
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
 | GET | `/orgs/<slug>` | `{org:{name,slug}, events:[{id,name,booths:[{id,name,mode,is_closed}]}]}` — 운영 중 부스가 있는 행사만 |
-| GET | `/orgs/<slug>/booths/<id>` | 부스 정보 + `slots:[{label, remaining, full}]` 또는 `{remaining, full}`, `use_waitlist`, `is_active`. 기관 불일치 404 |
+| GET | `/orgs/<slug>/booths/<id>` | `{org:{name,slug}, event:{id,name}, booth:{id,name,mode,use_waitlist,is_active}, availability}`. 기관 불일치·비활성 기관 404. `availability`는 모드별 두 가지(아래) |
 | POST | `/booths/<id>/reservations` | `{name, gender, age_group, code, slot?}` → `{id, slot, status}` |
 | POST | `/booths/<id>/lookup` | `{name, code}` → `{name, slot, status, booth_name}` 또는 404 |
 | POST | `/booths/<id>/cancel` | `{name, code}` → 204. `noshow`·`completed`는 409 |
 | GET | `/booths/<id>/home` | `{slug}` — 기존 `/reserve/<id>` 리다이렉트용 |
 
-응답에 다른 신청자의 정보는 포함하지 않는다.
+`availability` (`capacity.py`): 정원 0은 무제한이라 `remaining`이 `null`, `full`은 항상 false.
+`is_closed` = 운영 중지이거나 (대기 미사용이면서 마감).
+- 선착순(`mode: "fcfs"`): `{remaining: int|null, full: bool, is_closed: bool}`
+- 시간대별(`mode: "time"`): `{slots:[{label, remaining: int|null, full: bool}], is_closed: bool}` — 슬롯 라벨은 `11시 A타임`(시간당 1칸이면 `11시`)
+
+신청 오류: 이름·식별번호·성별·연령대 검증 실패와 목록에 없는 슬롯은 `422 invalid`, 중복 `409 duplicate`, 정원 `409 full`(대기 사용 시 `waiting`으로 접수), 마감 `409 closed`.
+`lookup`·`cancel`은 같은 IP 15분 20회 제한을 공유한다. 응답에 다른 신청자의 정보는 포함하지 않는다.
 
 ### 7.2 인증 `/api/admin/auth`
 
-`POST /login` → `{user, csrf}` · `POST /logout` → 204 · `GET /me` → `{user, csrf, org}` ·
-`POST /password` `{current, new}` → 204
+`POST /login` `{username, password}` → `{user, csrf}` (실패 `401 invalid_credentials`, 시도 초과 `429`) ·
+`POST /logout` → 204 · `GET /me` → `{user, csrf, org}` (`org`는 `{id,name,slug}`, 슈퍼관리자는 `null`) ·
+`POST /password` `{current, new}` → 204 (현재 비밀번호 오류는 위 `422 fields.current`, 새 비밀번호 규칙 위반은 `422 fields.new`).
+`user` = `{id, username, display_name, org_id, is_superadmin, must_change_password}`.
+`must_change_password`면 `login`·`me`·`password`·`logout` 외 `/api/admin/*`는 `403 password_change_required`.
+CSRF: 로그인을 뺀 모든 변경 요청에 `X-CSRF-Token`(로그인·`me`가 돌려준 값) 필요. 없거나 틀리면 `403 csrf`.
 
 ### 7.3 기관 관리 `/api/admin`
 
 | 메서드 | 경로 | 권한 |
 |---|---|---|
-| GET/POST | `/orgs/<org>/users` | require_org. POST는 `{username, display_name}` → `{user, temp_password}` |
-| PATCH | `/users/<id>` | 같은 기관. `{display_name?, is_active?}` |
-| POST | `/users/<id>/reset-password` | 같은 기관 → `{temp_password}` |
+| GET/POST | `/orgs/<org>/users` | require_org. GET `{users:[user]}`. POST는 `{username, display_name}` → 201 `{user, temp_password}` (`username_taken` 409). 여기서 `user` = `{id, username, display_name, is_active, must_change_password, last_login_at, created_at}` |
+| PATCH | `/users/<id>` | 같은 기관. `{display_name?, is_active?}` → `{user}`. 자기 자신 비활성화 `cannot_deactivate_self`, 마지막 활성 계정 `last_active_user`(409) |
+| POST | `/users/<id>/reset-password` | 같은 기관 → `{temp_password}`. 자기 자신은 `409 use_password_change` |
 | GET | `/orgs/<org>/overview` | require_org. 소유 행사 + 연결 운영 단체(행사·주최 기관 이름 포함)와 부스 요약, 오늘·전체 신청 수, 운영 중 부스 수 |
-| GET/POST | `/orgs/<org>/events` | require_org |
-| PATCH/DELETE | `/events/<id>` | require_event |
-| GET/POST | `/events/<id>/partners` | require_event. POST `{name, linked_org_id?}` |
-| PATCH/DELETE | `/partners/<id>` | 소유. 삭제 시 배정 부스는 미배정으로 |
-| POST | `/partners/<id>/rotate-token` | 소유 |
-| GET | `/orgs/<org>/link-targets` | 연결 기관 선택용 활성 기관 목록 `{id, name}` |
-| GET/POST | `/events/<id>/booths` | require_event |
-| POST | `/events/<id>/booths/bulk` | require_event. `{rows:[...]}`: 전부 검증 후 일괄 삽입, 하나라도 오류면 `422 {fields:{rows:{<index>:<message>}}}` |
-| GET/PATCH/DELETE | `/booths/<id>` | GET·PATCH(관리 항목) manage, PATCH의 `event_id`·`partner_id`와 DELETE는 own |
-| POST | `/booths/<id>/toggle` | manage |
-| POST | `/booths/batch-status` | `{booth_ids, is_active}` — 모든 부스에 own 필요 |
-| POST | `/booths/<id>/rotate-token` | own |
-| GET | `/booths/<id>/reservations` | manage |
-| PATCH/DELETE | `/reservations/<id>` | 소속 부스 manage. PATCH `{status}` |
-| DELETE | `/booths/<id>/reservations` | manage (초기화) |
-| POST | `/stats` | `{booth_ids, mode}` — 모든 부스에 manage 필요 |
-| POST | `/export` | `{booth_ids}` → `{booths:[{event_name, booth_name, rows:[{slot,name,gender,age_group,code,status,created_at}]}]}` |
-| GET | `/orgs/<org>/audit` | require_org. `?before=<id>&limit=50(최대 200)&action=<접두사>` → `{items:[{id, at, actor, actor_label, action, target, summary, detail}], next_before}` 최신순 |
+| GET/POST | `/orgs/<org>/events` | require_org. GET `{events:[event]}`, POST 201 `{event}`. `event` = `{id, name, created_at, booth_count, partner_count}` |
+| PATCH/DELETE | `/events/<id>` | require_event. PATCH `{name}` → `{event}`, DELETE 204 |
+| GET/POST | `/events/<id>/partners` | require_event. POST `{name, linked_org_id?}` → 201 `{partner}`. GET `{partners:[partner]}`. `partner` = `{id, name, linked_org:{id,name}|null, access_token, booth_count}` |
+| PATCH/DELETE | `/partners/<id>` | 소유. PATCH `{name?, linked_org_id?}` → `{partner}`. 삭제 시 배정 부스는 미배정으로, 204 |
+| POST | `/partners/<id>/rotate-token` | 소유 → `{access_token}` |
+| GET | `/orgs/<org>/link-targets` | 연결 기관 선택용 활성 기관 목록(자기 기관 제외) `{orgs:[{id, name}]}` |
+| GET/POST | `/events/<id>/booths` | require_event. GET `{booths:[booth]}`, POST 201 `{booth}` (`booth`는 아래 부스 객체) |
+| POST | `/events/<id>/booths/bulk` | require_event. `{rows:[...]}`(최대 500): 전부 검증 후 일괄 삽입 → 201 `{created:n}`, 하나라도 오류면 `422 {fields:{rows:{<index>:<message>}}}` |
+| GET/PATCH/DELETE | `/booths/<id>` | GET `{booth}`, PATCH `{booth}`(관리 항목은 manage, `event_id`·`partner_id` 변경과 DELETE는 own; 행사를 옮기면 운영 단체는 미배정), DELETE 204 |
+| POST | `/booths/<id>/toggle` | manage → `{is_active}` (DB에서 원자적으로 뒤집은 값) |
+| POST | `/booths/batch-status` | `{booth_ids, is_active}` — 모든 부스에 own 필요, 하나라도 아니면 404로 아무것도 바꾸지 않음 → `{updated:n}`. 감사 기록은 부스 소유 기관마다 1건 |
+| POST | `/booths/<id>/rotate-token` | own → `{manage_token}` |
+| GET | `/booths/<id>/reservations` | manage → `{reservations:[reservation]}` (슬롯 시각순) |
+| PATCH/DELETE | `/reservations/<id>` | 소속 부스 manage. PATCH `{status}`(`normal|waiting|noshow|completed`) → `{reservation, over_capacity?}`, DELETE 204 |
+| DELETE | `/booths/<id>/reservations` | manage (초기화) → `{deleted:n}` |
+| POST | `/stats` | `{booth_ids(1~500), mode: simple|strict}` — 모든 부스에 manage 필요 → `{rows:[{age_group,male,female,total}], male, female, total}` (`noshow` 제외, strict는 (이름,성별,연령대) 중복 제거) |
+| POST | `/export` | `{booth_ids(1~500)}` → `{booths:[{booth_id, event_name, booth_name, rows:[{name,gender,age_group,code,slot,status,created_at}]}]}`. 감사 기록은 **부스 소유 기관마다 1건**(그 기관 부스 id만 `detail.booth_ids`에 담김) |
+| GET | `/orgs/<org>/audit` | require_org. `?before=<id>&limit=50(최대 200)&action=<접두사>` → `{items:[{id, org_id, actor_org_id, user_id, actor, actor_label, action, target, summary, detail, at}], next_before}` 최신순. 대상 기관이거나 행위자 기관인 행이 보인다 |
+
+객체 형태:
+- `booth` = `{id, event_id, event_name, org_id, partner_id, partner_name, name, mode, use_waitlist, total_limit, start_hour, end_hour, slots_per_hour, limit_per_slot, is_active, manage_token, count, availability}` (`count`는 `noshow` 제외 신청 수, `availability`는 7.1과 같은 모양)
+- `reservation` = `{id, booth_id, name, gender, age_group, code, slot, status, created_at}`
+- `GET /orgs/<org>/overview` → `{org:{id,name,slug}, owned:[{event:{id,name}, booths:[booth]}], linked:[{partner:{id,name}, event:{id,name}, host:{id,name}, booths:[booth]}], totals:{today, total, active_booths, booths}}`
 
 ### 7.4 링크 `/api/link`
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| GET | `/booth/<t>` | 부스 + 행사·기관 이름 + 명단 + 통계 |
-| PATCH | `/booth/<t>` | 관리 항목 수정 |
-| POST | `/booth/<t>/toggle` | 운영 시작/마감 |
-| PATCH/DELETE | `/booth/<t>/reservations/<rid>` | 상태 변경·삭제 |
-| DELETE | `/booth/<t>/reservations` | 초기화 |
-| GET | `/booth/<t>/export` | 내보내기 |
-| GET | `/partner/<t>` | 운영 단체 + 행사·기관 이름 + 배정 부스 요약 |
-| POST | `/partner/<t>/stats` · `/partner/<t>/export` | 배정 부스 범위 안의 `booth_ids` |
-| * | `/partner/<t>/booths/<id>/...` | 위 부스 링크 작업과 동일, 배정 부스만 |
+| GET | `/booth/<t>` | `{booth, org:{name,slug}, reservations:[reservation], stats}` (`stats`는 simple 모드 결과) |
+| PATCH | `/booth/<t>` | 관리 항목(이름·방식·대기·정원·시간 설정)만 → `{booth}`. 다른 키가 섞이면 403 |
+| POST | `/booth/<t>/toggle` | 운영 시작/마감 → `{is_active}` |
+| PATCH/DELETE | `/booth/<t>/reservations/<rid>` | 상태 변경 `{reservation, over_capacity?}`·삭제 204 |
+| DELETE | `/booth/<t>/reservations` | 초기화 → `{deleted:n}` |
+| GET | `/booth/<t>/export` | 내보내기 (7.3 `/export`와 같은 응답) |
+| GET | `/partner/<t>` | `{partner:{id,name}, event:{id,name}, org:{name,slug}, booths:[booth]}` |
+| POST | `/partner/<t>/stats` · `/partner/<t>/export` | `booth_ids`(생략하면 배정 부스 전체)는 배정 부스 범위 안이어야 함. export는 대상이 없으면 `{booths:[]}` |
+| GET/PATCH | `/partner/<t>/booths/<id>` | 배정 부스만. `{booth}` |
+| POST | `/partner/<t>/booths/<id>/toggle` | → `{is_active}` |
+| GET/DELETE | `/partner/<t>/booths/<id>/reservations` | 목록 `{reservations}` · 초기화 `{deleted}` |
+| PATCH/DELETE | `/partner/<t>/booths/<id>/reservations/<rid>` | 부스 링크와 동일 |
+
+링크 토큰이 틀리면 `404 not_found`(같은 IP 15분 30회 제한 후 429).
 
 ### 7.5 슈퍼관리자 `/api/admin/super`
 
-`GET/POST /orgs` · `PATCH /orgs/<id>` `{name?, slug?, is_active?}` · `GET /backup`(일관된 DB 사본 다운로드) ·
-`GET /audit`(전체 감사 로그, 7.3과 같은 쿼리 파라미터 + `org_id` 필터).
+`GET /orgs` → `{orgs:[{id,name,slug,is_active,created_at,user_count,event_count}]}` · `POST /orgs` `{name, slug}` → 201 `{org}`
+(`slug_taken` 409, 예약어·형식 위반 422) · `PATCH /orgs/<id>` `{name?, slug?, is_active?}` → `{org}`
+(비활성화하면 소속 계정 세션 모두 삭제) · `GET /backup`(일관된 DB 사본 다운로드) ·
+`GET /audit`(전체 감사 로그, 7.3과 같은 쿼리 파라미터 + `org_id` 필터) ·
+`GET /whoami-ip` → `{remote_addr, x_forwarded_for}` (`TRUSTED_PROXY_HOPS` 점검용, README 운영 전환 절차 참고).
+`org.create` 감사 행의 `org_id`는 새 기관의 id, `backup.download`는 `org_id` NULL.
 기관 계정 관리는 7.3을 사용한다(슈퍼관리자는 require_org 통과).
 
 ### 7.6 보안 헤더
