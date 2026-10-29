@@ -89,8 +89,10 @@ def org_page(slug):
             a = availability(b, occupancy(db, b["id"]))
             booths.append({"id": b["id"], "name": b["name"], "mode": b["mode"], "is_closed": a["is_closed"]})
         if booths:
-            events.append({"id": ev["id"], "name": ev["name"], "booths": booths})
-    return jsonify(org={"name": org["name"], "slug": org["slug"]}, events=events)
+            events.append({"id": ev["id"], "name": ev["name"], "logo_url": assets.url(ev["logo"]),
+                           "notice": ev["notice"], "booths": booths})
+    return jsonify(org={"name": org["name"], "slug": org["slug"], "logo_url": assets.url(org["logo"])},
+                   events=events)
 
 
 @bp.get("/orgs/<slug>/booths/<int:booth_id>")
@@ -99,8 +101,10 @@ def booth_page(slug, booth_id):
     if booth["org_slug"] != slug:
         not_found()
     return jsonify(
-        org={"name": booth["org_name"], "slug": booth["org_slug"]},
-        event={"id": booth["event_id"], "name": booth["event_name"]},
+        org={"name": booth["org_name"], "slug": booth["org_slug"],
+             "logo_url": assets.url(booth["org_logo"])},
+        event={"id": booth["event_id"], "name": booth["event_name"],
+               "logo_url": assets.url(booth["event_logo"]), "notice": booth["event_notice"]},
         booth={"id": booth["id"], "name": booth["name"], "mode": booth["mode"],
                "use_waitlist": bool(booth["use_waitlist"]), "is_active": bool(booth["is_active"])},
         availability=availability(booth, occupancy(get_db(), booth_id)))

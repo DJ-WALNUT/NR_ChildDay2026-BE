@@ -36,7 +36,8 @@ def require_user_target(user_id: int) -> sqlite3.Row:
 
 BOOTH_SQL = """
 SELECT b.*, e.name AS event_name, o.id AS org_id, o.name AS org_name, o.slug AS org_slug,
-       o.is_active AS org_active, p.name AS partner_name, p.linked_org_id AS partner_linked_org_id
+       o.is_active AS org_active, p.name AS partner_name, p.linked_org_id AS partner_linked_org_id,
+       o.logo AS org_logo, e.logo AS event_logo, e.notice AS event_notice
 FROM booths b
 JOIN events e ON e.id = b.event_id
 JOIN organizations o ON o.id = e.org_id

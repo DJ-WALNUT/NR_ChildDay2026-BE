@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from flask import Blueprint, Response, current_app, g, jsonify, request
 
-from .. import ratelimit
+from .. import assets, ratelimit
 from ..audit import audit
 from ..auth import (COOKIE_NAME, DUMMY_HASH, LOGIN_LIMIT, LOGIN_WINDOW_SEC, User, csrf_token,
                     current_user, login_required, revoke_sessions, start_session, user_json,
@@ -73,8 +73,9 @@ def me():
     u = current_user()
     org = None
     if u.org_id is not None:
-        r = get_db().execute("SELECT id, name, slug FROM organizations WHERE id = ?", (u.org_id,)).fetchone()
-        org = dict(r) if r else None
+        r = get_db().execute("SELECT id, name, slug, logo FROM organizations WHERE id = ?", (u.org_id,)).fetchone()
+        org = ({"id": r["id"], "name": r["name"], "slug": r["slug"], "logo_url": assets.url(r["logo"])}
+               if r else None)
     return jsonify(user=user_json(u), csrf=csrf_token(), org=org)
 
 

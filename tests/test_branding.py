@@ -50,3 +50,40 @@ def test_logo_audited_and_isolated(client, db, make_org, make_user, login_as, ap
     up(api, client, f"/api/admin/orgs/{a}/logo", PNG)
     row = db.execute("SELECT action, org_id FROM audit_log WHERE action='org.logo'").fetchone()
     assert tuple(row) == ("org.logo", a)
+
+def test_notice_rules(client, make_org, make_user, login_as, api, make_event):
+    org = make_org(); ev = make_event(org); make_user("hong", org_id=org); login_as(client, "hong")
+    r = api(client, "PATCH", f"/api/admin/events/{ev}", json={"notice": "  시작 5분 뒤 미도착 시 취소  "})
+    assert r.json["event"]["notice"] == "시작 5분 뒤 미도착 시 취소"
+    assert api(client, "PATCH", f"/api/admin/events/{ev}", json={"notice": "   "}).json["event"]["notice"] is None
+    assert api(client, "PATCH", f"/api/admin/events/{ev}", json={"notice": "가" * 501}).status_code == 422
+    assert api(client, "PATCH", f"/api/admin/events/{ev}", json={"notice": 3}).status_code == 422
+    assert api(client, "PATCH", f"/api/admin/events/{ev}", json={}).status_code == 422
+    r = api(client, "PATCH", f"/api/admin/events/{ev}", json={"name": "새 이름"})
+    assert r.json["event"]["name"] == "새 이름" and r.json["event"]["notice"] is None
+
+def test_event_update_audit_detail_only_changed(client, db, make_org, make_user, login_as, api, make_event):
+    import json
+    org = make_org(); ev = make_event(org); make_user("hong", org_id=org); login_as(client, "hong")
+    api(client, "PATCH", f"/api/admin/events/{ev}", json={"notice": "안내"})
+    d = db.execute("SELECT detail FROM audit_log WHERE action='event.update'").fetchone()[0]
+    assert json.loads(d) == {"notice": {"from": None, "to": "안내"}}
+
+def test_public_payloads_carry_branding(client, make_org, make_user, login_as, api, make_event, make_booth):
+    org = make_org(slug="nareum"); ev = make_event(org); b = make_booth(ev)
+    make_user("hong", org_id=org); login_as(client, "hong")
+    org_url = up(api, client, f"/api/admin/orgs/{org}/logo", PNG).json["logo_url"]
+    ev_url = up(api, client, f"/api/admin/events/{ev}/logo", JPG).json["logo_url"]
+    api(client, "PATCH", f"/api/admin/events/{ev}", json={"notice": "안내"})
+    p = client.get("/api/public/orgs/nareum").json
+    assert p["org"]["logo_url"] == org_url and p["events"][0]["logo_url"] == ev_url and p["events"][0]["notice"] == "안내"
+    bp = client.get(f"/api/public/orgs/nareum/booths/{b}").json
+    assert (bp["org"]["logo_url"], bp["event"]["logo_url"], bp["event"]["notice"]) == (org_url, ev_url, "안내")
+    assert client.get("/api/admin/auth/me").json["org"]["logo_url"] == org_url
+    ev_json = api(client, "GET", f"/api/admin/orgs/{org}/events").json["events"][0]
+    assert ev_json["logo_url"] == ev_url and ev_json["notice"] == "안내"
+
+def test_payloads_null_without_branding(client, make_org, make_event, make_booth):
+    org = make_org(slug="gmyouth"); b = make_booth(make_event(org))
+    p = client.get("/api/public/orgs/gmyouth").json
+    assert p["org"]["logo_url"] is None and p["events"][0]["logo_url"] is None and p["events"][0]["notice"] is None

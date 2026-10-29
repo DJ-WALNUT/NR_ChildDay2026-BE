@@ -280,8 +280,8 @@ walnutphoto(`server/app/auth.py`, `security.py`, `ratelimit.py`)의 구현을 �
 | 분류 | action |
 |---|---|
 | 계정 | `auth.login`, `auth.password_change`, `user.create`, `user.update`, `user.reset_password`, `user.deactivate`, `user.activate` |
-| 기관 | `org.create`, `org.update`(슈퍼관리자) |
-| 행사·운영 단체 | `event.create`, `event.update`, `event.delete`, `partner.create`, `partner.update`, `partner.delete`, `partner.rotate_token` |
+| 기관 | `org.create`, `org.update`(슈퍼관리자), `org.logo`(detail `{action: set|delete}`) |
+| 행사·운영 단체 | `event.create`, `event.update`(detail에 바뀐 항목 `{from,to}`, notice 포함), `event.logo`(detail `{action: set|delete}`), `event.delete`, `partner.create`, `partner.update`, `partner.delete`, `partner.rotate_token` |
 | 부스 | `booth.create`, `booth.bulk_create`, `booth.update`, `booth.move`, `booth.delete`, `booth.toggle`, `booth.batch_status`, `booth.rotate_token` |
 | 명단 | `reservation.delete`, `reservation.clear`(초기화), `export` |
 | 기타 | `backup.download` |
@@ -316,6 +316,7 @@ walnutphoto(`server/app/auth.py`, `security.py`, `ratelimit.py`)의 구현을 �
 | 404 | `not_found` |
 | 405 | `method_not_allowed` |
 | 409 | `full`(정원 마감), `closed`(부스 마감), `duplicate`(같은 이름+식별번호 신청 중복), `not_cancellable`(`noshow`·`completed` 취소), `cannot_deactivate_self`, `use_password_change`(자기 비밀번호 초기화 시도), `last_active_user`(기관의 마지막 활성 계정 비활성화), `username_taken`, `slug_taken` |
+| 413 | `file_too_large`(로고 파일 1MB 초과·과대 요청 본문) |
 | 422 | `invalid` + `fields:{<필드>:<메시지>}` |
 | 429 | `rate_limited` |
 
@@ -326,12 +327,13 @@ walnutphoto(`server/app/auth.py`, `security.py`, `ratelimit.py`)의 구현을 �
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| GET | `/orgs/<slug>` | `{org:{name,slug}, events:[{id,name,booths:[{id,name,mode,is_closed}]}]}` — 운영 중 부스가 있는 행사만 |
-| GET | `/orgs/<slug>/booths/<id>` | `{org:{name,slug}, event:{id,name}, booth:{id,name,mode,use_waitlist,is_active}, availability}`. 기관 불일치·비활성 기관 404. `availability`는 모드별 두 가지(아래) |
+| GET | `/orgs/<slug>` | `{org:{name,slug,logo_url}, events:[{id,name,logo_url,notice,booths:[{id,name,mode,is_closed}]}]}` — 운영 중 부스가 있는 행사만 |
+| GET | `/orgs/<slug>/booths/<id>` | `{org:{name,slug,logo_url}, event:{id,name,logo_url,notice}, booth:{id,name,mode,use_waitlist,is_active}, availability}`. 기관 불일치·비활성 기관 404. `availability`는 모드별 두 가지(아래) |
 | POST | `/booths/<id>/reservations` | `{name, gender, age_group, code, slot?}` → `{id, slot, status}` |
 | POST | `/booths/<id>/lookup` | `{name, code}` → `{name, slot, status, booth_name}` 또는 404 |
 | POST | `/booths/<id>/cancel` | `{name, code}` → 204. `noshow`·`completed`는 409 |
 | GET | `/booths/<id>/home` | `{slug}` — 기존 `/reserve/<id>` 리다이렉트용 |
+| GET | `/assets/<name>` | 로고 이미지. 이름은 `<sha256 hex 64자>.png·jpg·webp` 형식만 허용(그 외 404). `Cache-Control: public, max-age=31536000, immutable`, 이미지 Content-Type, `X-Content-Type-Options: nosniff` |
 
 `availability` (`capacity.py`): 정원 0은 무제한이라 `remaining`이 `null`, `full`은 항상 false.
 `is_closed` = 운영 중지이거나 (대기 미사용이면서 마감).
@@ -344,7 +346,7 @@ walnutphoto(`server/app/auth.py`, `security.py`, `ratelimit.py`)의 구현을 �
 ### 7.2 인증 `/api/admin/auth`
 
 `POST /login` `{username, password}` → `{user, csrf}` (실패 `401 invalid_credentials`, 시도 초과 `429`) ·
-`POST /logout` → 204 · `GET /me` → `{user, csrf, org}` (`org`는 `{id,name,slug}`, 슈퍼관리자는 `null`) ·
+`POST /logout` → 204 · `GET /me` → `{user, csrf, org}` (`org`는 `{id,name,slug,logo_url}`, 슈퍼관리자는 `null`) ·
 `POST /password` `{current, new}` → 204 (현재 비밀번호 오류는 위 `422 fields.current`, 새 비밀번호 규칙 위반은 `422 fields.new`).
 `user` = `{id, username, display_name, org_id, is_superadmin, must_change_password}`.
 `must_change_password`면 `login`·`me`·`password`·`logout` 외 `/api/admin/*`는 `403 password_change_required`.
@@ -358,8 +360,12 @@ CSRF: 로그인을 뺀 모든 변경 요청에 `X-CSRF-Token`(로그인·`me`가
 | PATCH | `/users/<id>` | 같은 기관. `{display_name?, is_active?}` → `{user}`. 자기 자신 비활성화 `cannot_deactivate_self`, 마지막 활성 계정 `last_active_user`(409) |
 | POST | `/users/<id>/reset-password` | 같은 기관 → `{temp_password}`. 자기 자신은 `409 use_password_change` |
 | GET | `/orgs/<org>/overview` | require_org. 소유 행사 + 연결 운영 단체(행사·주최 기관 이름 포함)와 부스 요약, 오늘·전체 신청 수, 운영 중 부스 수 |
-| GET/POST | `/orgs/<org>/events` | require_org. GET `{events:[event]}`, POST 201 `{event}`. `event` = `{id, name, created_at, booth_count, partner_count}` |
-| PATCH/DELETE | `/events/<id>` | require_event. PATCH `{name}` → `{event}`, DELETE 204 |
+| GET/POST | `/orgs/<org>/events` | require_org. GET `{events:[event]}`, POST 201 `{event}`. `event` = `{id, name, created_at, booth_count, partner_count, logo_url, notice}` |
+| PATCH/DELETE | `/events/<id>` | require_event. PATCH `{name?, notice?}`(둘 다 없으면 422; `notice`는 앞뒤 공백 제거 후 0~500자 문자열 또는 null, 빈 값은 null로 저장) → `{event}`, DELETE 204 |
+| PUT | `/orgs/<org>/logo` | require_org. multipart `file`(PNG·JPEG·WebP, 시그니처로 판별, 1MB 이하; SVG 거부) → `{logo_url}`. 파일 없음·빈 파일·형식 오류 422, 초과 413 |
+| DELETE | `/orgs/<org>/logo` | require_org → 204 |
+| PUT | `/events/<id>/logo` | require_event. 위와 같음 → `{logo_url}` |
+| DELETE | `/events/<id>/logo` | require_event → 204 |
 | GET/POST | `/events/<id>/partners` | require_event. POST `{name, linked_org_id?}` → 201 `{partner}`. GET `{partners:[partner]}`. `partner` = `{id, name, linked_org:{id,name}|null, access_token, booth_count}` |
 | PATCH/DELETE | `/partners/<id>` | 소유. PATCH `{name?, linked_org_id?}` → `{partner}`. 삭제 시 배정 부스는 미배정으로, 204 |
 | POST | `/partners/<id>/rotate-token` | 소유 → `{access_token}` |

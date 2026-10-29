@@ -6,6 +6,7 @@ import sqlite3
 
 from flask import Blueprint, jsonify
 
+from .. import assets
 from ..access import require_event, require_org
 from ..audit import audit
 from ..auth import login_required
@@ -19,7 +20,7 @@ from .common import json_body
 bp = Blueprint("admin_events", __name__, url_prefix="/api/admin")
 
 _EVENT_SQL = (
-    "SELECT e.id, e.name, e.created_at,"
+    "SELECT e.id, e.name, e.created_at, e.logo, e.notice,"
     " (SELECT COUNT(*) FROM booths b WHERE b.event_id = e.id) AS booth_count,"
     " (SELECT COUNT(*) FROM partners p WHERE p.event_id = e.id) AS partner_count"
     " FROM events e")
@@ -31,7 +32,8 @@ _PARTNER_SQL = (
 
 def _event_out(r: sqlite3.Row) -> dict:
     return {"id": r["id"], "name": r["name"], "created_at": r["created_at"],
-            "booth_count": r["booth_count"], "partner_count": r["partner_count"]}
+            "booth_count": r["booth_count"], "partner_count": r["partner_count"],
+            "logo_url": assets.url(r["logo"]), "notice": r["notice"]}
 
 
 def _partner_out(r: sqlite3.Row) -> dict:
@@ -53,6 +55,14 @@ def _name(v, max_len: int = 100) -> str:
     if not isinstance(v, str) or not 1 <= len(v.strip()) <= max_len:
         raise ValidationError({"name": f"1~{max_len}자로 입력하세요."})
     return v.strip()
+
+
+def _notice(v) -> str | None:
+    if v is None:
+        return None
+    if not isinstance(v, str) or len(v.strip()) > 500:
+        raise ValidationError({"notice": "안내 문구는 500자 이하 문자열이어야 합니다."})
+    return v.strip() or None
 
 
 def _linked_org(v, owner_org_id: int) -> int | None:
@@ -100,12 +110,32 @@ def create_event(org_id: int):
 @login_required
 def update_event(event_id: int):
     ev = require_event(event_id)
-    name = _name(json_body().get("name"))
+    body = json_body()
+    if "name" not in body and "notice" not in body:
+        raise ValidationError({"name": "name 또는 notice 중 하나는 필요합니다."})
+    fields: dict[str, str] = {}
+    name, notice = ev["name"], ev["notice"]
+    if "name" in body:
+        try:
+            name = _name(body["name"])
+        except ValidationError as e:
+            fields.update(e.fields)
+    if "notice" in body:
+        try:
+            notice = _notice(body["notice"])
+        except ValidationError as e:
+            fields.update(e.fields)
+    if fields:
+        raise ValidationError(fields)
+    detail = {}
+    if name != ev["name"]:
+        detail["name"] = {"from": ev["name"], "to": name}
+    if notice != ev["notice"]:
+        detail["notice"] = {"from": ev["notice"], "to": notice}
     with tx() as conn:
-        conn.execute("UPDATE events SET name = ? WHERE id = ?", (name, event_id))
+        conn.execute("UPDATE events SET name = ?, notice = ? WHERE id = ?", (name, notice, event_id))
         audit(current_principal(), "event.update", f"event:{event_id}",
-              f"행사 이름 변경: {ev['name']} → {name}", org_id=ev["org_id"],
-              detail={"name": {"from": ev["name"], "to": name}})
+              f"행사 수정: {name}", org_id=ev["org_id"], detail=detail)
     return jsonify(event=_load_event(event_id))
 
 
