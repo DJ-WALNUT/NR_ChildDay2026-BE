@@ -110,3 +110,57 @@ def test_refuses_when_host_event_missing(tmp_path, legacy_db):
     with pytest.raises(MigrationError):
         run(legacy_db, tmp_path / "app.db")
     assert not (tmp_path / "app.db").exists()
+
+
+def test_aborts_on_duplicate_booth_name_phone_naming_rows(tmp_path, legacy_db):
+    c = sqlite3.connect(legacy_db)
+    c.execute("INSERT INTO reservation VALUES (?,?,?,?,?,?,?,?,?)",
+              (7, 30, "이름4", "남", "9~13세", "1234", "선착순 접수", "normal", None))
+    c.commit()
+    c.close()
+    with pytest.raises(MigrationError, match=r"중복.*\[4, 7\]"):
+        run(legacy_db, tmp_path / "app.db")
+    assert not (tmp_path / "app.db").exists()
+
+
+def test_duplicates_in_dropped_booths_are_ignored(tmp_path, legacy_db):
+    c = sqlite3.connect(legacy_db)
+    c.execute("INSERT INTO reservation VALUES (?,?,?,?,?,?,?,?,?)",
+              (7, 10, "이름1", "남", "9~13세", "1234", "선착순 접수", "normal", None))
+    c.commit()
+    c.close()
+    assert run(legacy_db, tmp_path / "app.db")["dropped"]["reservations"] == 3
+
+
+def test_reports_orphaned_reservations_for_adjusted_time_booth(tmp_path, legacy_db):
+    c = sqlite3.connect(legacy_db)
+    # 11~16시, 시간당 10칸 -> 6칸으로 줄면 'G타임' 이상 슬롯은 새 목록에 없다
+    c.execute("INSERT INTO booth VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+              _booth(36, 3, "time", slots_per_hour=10))
+    c.executemany("INSERT INTO reservation VALUES (?,?,?,?,?,?,?,?,?)", [
+        _res(7, 36, "11시 A타임", "normal"), _res(8, 36, "11시 H타임", "normal"),
+        _res(9, 36, "12시 J타임", "normal")])
+    c.commit()
+    c.close()
+    rep = run(legacy_db, tmp_path / "app.db")
+    entries = [a for a in rep["adjusted_booths"] if a["id"] == 36]
+    assert entries and all(a["orphaned_reservations"] == 2 for a in entries)
+
+
+def test_orphan_count_ignores_fcfs_booths(tmp_path, legacy_db):
+    c = sqlite3.connect(legacy_db)
+    c.execute("INSERT INTO booth VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+              _booth(37, 3, "fcfs", slots_per_hour=10))
+    c.execute("INSERT INTO reservation VALUES (?,?,?,?,?,?,?,?,?)", _res(7, 37, "선착순 접수", "normal"))
+    c.commit()
+    c.close()
+    rep = run(legacy_db, tmp_path / "app.db")
+    assert all(a["orphaned_reservations"] == 0 for a in rep["adjusted_booths"] if a["id"] == 37)
+
+
+def test_main_reports_sqlite_error_cleanly(tmp_path, capsys):
+    from scripts.migrate_legacy import main
+    bad = tmp_path / "bad.db"
+    bad.write_bytes(b"this is not a sqlite database" * 20)
+    assert main(["--legacy", str(bad), "--out", str(tmp_path / "app.db")]) == 1
+    assert "이관 실패" in capsys.readouterr().err

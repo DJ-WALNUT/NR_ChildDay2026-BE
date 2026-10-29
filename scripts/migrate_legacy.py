@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from app.capacity import slot_labels  # noqa: E402
 from app.db import _connect, migrate  # noqa: E402
 from app.security import link_token  # noqa: E402
 
@@ -83,6 +84,13 @@ def _check_values(kept_booths, kept_resv):
     ids = [r["id"] for r in kept_resv if r["time"] is None]
     if ids:
         raise MigrationError(f"reservation.time 이 NULL 인 행: {ids}")
+    groups = {}
+    for r in kept_resv:
+        groups.setdefault((r["booth_id"], r["name"], r["phone"]), []).append(r["id"])
+    dups = sorted(i for g in groups.values() if len(g) > 1 for i in g)
+    if dups:
+        raise MigrationError(f"같은 부스에 (이름, 식별번호)가 중복된 신청 id: {dups} "
+                             "(새 스키마의 UNIQUE(booth_id, name, code) 위반 — 기존 DB에서 먼저 정리하세요)")
 
 
 def _migrate(src, out: Path, now: float) -> dict:
@@ -139,7 +147,15 @@ def _migrate(src, out: Path, now: float) -> dict:
             report["orgs"][slug]["events"] += 1
         booth_slug = {}
         for b in kept_booths:
+            first = len(report["adjusted_booths"])
             v = _booth_values(b, report["adjusted_booths"])
+            if len(report["adjusted_booths"]) > first:
+                orphans = 0
+                if b["mode"] == "time":
+                    valid = set(slot_labels(v["start_hour"], v["end_hour"], v["slots_per_hour"]))
+                    orphans = sum(1 for r in kept_resv if r["booth_id"] == b["id"] and r["time"] not in valid)
+                for a in report["adjusted_booths"][first:]:
+                    a["orphaned_reservations"] = orphans
             conn.execute(
                 "INSERT INTO booths (id, event_id, partner_id, name, mode, use_waitlist, total_limit, start_hour,"
                 " end_hour, slots_per_hour, limit_per_slot, is_active, manage_token, created_at)"
@@ -216,7 +232,8 @@ def format_report(rep: dict) -> str:
     lines.append(f"비표준 식별번호(4자리 숫자 아님, 그대로 이관): {rep['nonstandard_codes']}")
     lines.append(f"조정된 부스 값: {len(rep['adjusted_booths'])}")
     for a in rep["adjusted_booths"]:
-        lines.append(f"  부스 {a['id']} {a['field']}: {a['from']} -> {a['to']}")
+        extra = f" (새 슬롯 목록에 없는 신청 {a['orphaned_reservations']}건)" if a.get("orphaned_reservations") else ""
+        lines.append(f"  부스 {a['id']} {a['field']}: {a['from']} -> {a['to']}{extra}")
     return "\n".join(lines)
 
 
@@ -231,6 +248,9 @@ def main(argv=None) -> int:
     try:
         rep = run(a.legacy, a.out)
     except MigrationError as e:
+        print(f"이관 실패: {e}", file=sys.stderr)
+        return 1
+    except sqlite3.Error as e:
         print(f"이관 실패: {e}", file=sys.stderr)
         return 1
     print(format_report(rep))
