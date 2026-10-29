@@ -1,0 +1,3 @@
+ALTER TABLE organizations ADD COLUMN logo TEXT;
+ALTER TABLE events ADD COLUMN logo TEXT;
+ALTER TABLE events ADD COLUMN notice TEXT;
