@@ -25,6 +25,8 @@ def normalize_name(s) -> str:
 
 
 def normalize_code(s) -> str:
+    if isinstance(s, str) and any(c.isdigit() and c not in "0123456789" for c in s):
+        raise ValidationError({"code": "식별번호는 숫자 4자리입니다."})
     digits = re.sub(r"[^0-9]", "", s) if isinstance(s, str) else ""
     if len(digits) != 4:
         raise ValidationError({"code": "식별번호는 숫자 4자리입니다."})
@@ -114,6 +116,8 @@ def reserve(booth_id):
         raise ValidationError(fields)
     with tx() as db:
         booth = _public_booth(booth_id)
+        if not booth["is_active"]:
+            raise ApiError(409, "closed")
         if _find(db, booth_id, name, code) is not None:
             conflict("duplicate")
         slot, status = decide_status(booth, occupancy(db, booth_id), slot)

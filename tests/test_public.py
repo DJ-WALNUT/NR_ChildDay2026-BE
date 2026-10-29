@@ -78,3 +78,24 @@ def test_concurrent_reservations_never_exceed(app, make_org, make_event, make_bo
 def test_home_redirect_slug(client, make_org, make_event, make_booth):
     b = make_booth(make_event(make_org(slug="gmyouth")))
     assert client.get(f"/api/public/booths/{b}/home").json == {"slug": "gmyouth"}
+
+def test_code_rejects_mixed_fullwidth_digits(client, make_org, make_event, make_booth):
+    b = make_booth(make_event(make_org()), mode="fcfs", total_limit=10)
+    body = {"name": "a", "gender": "남", "age_group": "9~13세"}
+    r = client.post(f"/api/public/booths/{b}/reservations", json={**body, "code": "１2345"})
+    assert r.status_code == 422 and "code" in r.json["fields"]
+    assert client.post(f"/api/public/booths/{b}/reservations", json={**body, "code": "12-34"}).status_code == 201
+
+def test_closed_booth_wins_over_duplicate(client, make_org, make_event, make_booth, make_reservation):
+    b = make_booth(make_event(make_org()), mode="fcfs", total_limit=10, is_active=0)
+    make_reservation(b, "홍길동", code="1234", slot="선착순")
+    r = client.post(f"/api/public/booths/{b}/reservations",
+                    json={"name": "홍길동", "gender": "남", "age_group": "9~13세", "code": "1234"})
+    assert r.status_code == 409 and r.json["error"] == "closed"
+
+def test_lookup_and_cancel_share_counter(client, make_org, make_event, make_booth):
+    b = make_booth(make_event(make_org()))
+    body = {"name": "x", "code": "0000"}
+    codes = [client.post(f"/api/public/booths/{b}/{'lookup' if i % 2 else 'cancel'}", json=body).status_code
+             for i in range(21)]
+    assert codes[:20] == [404] * 20 and codes[20] == 429
