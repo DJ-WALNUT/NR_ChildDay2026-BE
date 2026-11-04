@@ -97,6 +97,53 @@ def test_closed_booth_wins_over_duplicate(client, make_org, make_event, make_boo
                     json={"name": "홍길동", "gender": "남", "age_group": "9~13세", "code": "1234"})
     assert r.status_code == 409 and r.json["error"] == "closed"
 
+def _apply(client, booth_id, name, code, slot=None):
+    return client.post(f"/api/public/booths/{booth_id}/reservations",
+                       json={"name": name, "gender": "남", "age_group": "9~13세", "code": code, "slot": slot})
+
+def test_unknown_slot_does_not_reveal_identity(client, make_org, make_event, make_booth, make_reservation):
+    b = make_booth(make_event(make_org()), start_hour=11, end_hour=12, slots_per_hour=1)
+    make_reservation(b, "홍길동", code="1234", slot="11시")
+    match, miss = _apply(client, b, "홍길동", "1234", "없는 시간"), _apply(client, b, "홍길동", "9999", "없는 시간")
+    assert match.status_code == miss.status_code == 422
+    assert match.json == miss.json
+
+def test_full_slot_does_not_reveal_identity(client, make_org, make_event, make_booth, make_reservation):
+    b = make_booth(make_event(make_org()), start_hour=11, end_hour=12, slots_per_hour=1, limit_per_slot=1)
+    make_reservation(b, "홍길동", code="1234", slot="11시")
+    match, miss = _apply(client, b, "홍길동", "1234", "11시"), _apply(client, b, "홍길동", "9999", "11시")
+    assert match.status_code == miss.status_code == 409
+    assert match.json == miss.json and match.json["error"] == "full"
+
+def test_full_fcfs_does_not_reveal_identity(client, make_org, make_event, make_booth, make_reservation):
+    b = make_booth(make_event(make_org()), mode="fcfs", total_limit=1)
+    make_reservation(b, "홍길동", code="1234", slot="선착순")
+    match, miss = _apply(client, b, "홍길동", "1234"), _apply(client, b, "홍길동", "9999")
+    assert match.json == miss.json and match.json["error"] == "full"
+
+def test_waitlist_still_reports_duplicate(client, make_org, make_event, make_booth, make_reservation):
+    b = make_booth(make_event(make_org()), mode="fcfs", total_limit=1, use_waitlist=1)
+    make_reservation(b, "홍길동", code="1234", slot="선착순")
+    r = _apply(client, b, "홍길동", "1234")
+    assert r.status_code == 409 and r.json["error"] == "duplicate"
+    assert _apply(client, b, "김철수", "1234").json["status"] == "waiting"
+    assert _apply(client, b, "김철수", "1234").json["error"] == "duplicate"
+
+@pytest.mark.parametrize("path, body", [
+    ("reservations", {"name": "x", "gender": "남", "age_group": "9~13세", "code": "0000"}),
+    ("lookup", {"name": "x", "code": "0000"}),
+    ("cancel", {"name": "x", "code": "0000"}),
+])
+def test_unknown_booth_writes_no_rate_events(client, db, path, body):
+    codes = [client.post(f"/api/public/booths/{i}/{path}", json=body).status_code for i in range(9000, 9040)]
+    assert codes == [404] * 40
+    assert db.execute("SELECT COUNT(*) FROM rate_events").fetchone()[0] == 0
+
+def test_inactive_org_booth_writes_no_rate_events(client, db, make_org, make_event, make_booth):
+    b = make_booth(make_event(make_org(active=False)))
+    assert client.post(f"/api/public/booths/{b}/lookup", json={"name": "x", "code": "0000"}).status_code == 404
+    assert db.execute("SELECT COUNT(*) FROM rate_events").fetchone()[0] == 0
+
 def test_lookup_and_cancel_share_counter(client, make_org, make_event, make_booth):
     b = make_booth(make_event(make_org()))
     body = {"name": "x", "code": "0000"}

@@ -340,8 +340,8 @@ walnutphoto(`server/app/auth.py`, `security.py`, `ratelimit.py`)의 구현을 �
 - 선착순(`mode: "fcfs"`): `{remaining: int|null, full: bool, is_closed: bool}`
 - 시간대별(`mode: "time"`): `{slots:[{label, remaining: int|null, full: bool}], is_closed: bool}` — 슬롯 라벨은 `11시 A타임`(시간당 1칸이면 `11시`)
 
-신청 오류: 이름·식별번호·성별·연령대 검증 실패와 목록에 없는 슬롯은 `422 invalid`, 중복 `409 duplicate`, 정원 `409 full`(대기 사용 시 `waiting`으로 접수), 마감 `409 closed`.
-`lookup`·`cancel`은 같은 IP·같은 부스 기준 15분 20회 제한을 공유한다. 응답에 다른 신청자의 정보는 포함하지 않는다.
+신청 오류: 이름·식별번호·성별·연령대 검증 실패와 목록에 없는 슬롯은 `422 invalid`, 중복 `409 duplicate`, 정원 `409 full`(대기 사용 시 `waiting`으로 접수), 마감 `409 closed`. 판정 순서는 마감 → 슬롯·정원 → 중복이다. 슬롯 오류와 `full`은 이름+식별번호 일치 여부와 무관하게 같은 응답이므로, 꽉 찬 슬롯에 재신청하면 `duplicate`가 아니라 `full`을 받는다.
+`lookup`·`cancel`은 같은 IP·같은 부스 기준 15분 20회 제한을 공유한다. 없는 부스는 제한을 세기 전에 404로 끝나 `rate_events` 행을 만들지 않는다. 응답에 다른 신청자의 정보는 포함하지 않는다.
 
 ### 7.2 인증 `/api/admin/auth`
 

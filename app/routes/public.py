@@ -118,6 +118,7 @@ def booth_home(booth_id):
 
 @bp.post("/booths/<int:booth_id>/reservations")
 def reserve(booth_id):
+    _public_booth(booth_id)  # 없는 부스는 rate_events 행을 만들지 않는다
     guard_config(f"reserve:{request.remote_addr}:{booth_id}", "VISITOR_RESERVE")
     body = json_body()
     fields: dict[str, str] = {}
@@ -139,9 +140,10 @@ def reserve(booth_id):
         booth = _public_booth(booth_id)
         if not booth["is_active"]:
             raise ApiError(409, "closed")
+        # 슬롯 검증이 먼저다. 중복을 먼저 보면 없는 슬롯·마감 응답으로 이름+식별번호 일치를 알 수 있다.
+        slot, status = decide_status(booth, occupancy(db, booth_id), slot)
         if _find(db, booth_id, name, code) is not None:
             conflict("duplicate")
-        slot, status = decide_status(booth, occupancy(db, booth_id), slot)
         cur = db.execute(
             "INSERT INTO reservations (booth_id, name, gender, age_group, code, slot, status, created_at)"
             " VALUES (?,?,?,?,?,?,?,?)",
@@ -152,8 +154,8 @@ def reserve(booth_id):
 
 @bp.post("/booths/<int:booth_id>/lookup")
 def lookup(booth_id):
-    guard_config(f"lookup:{request.remote_addr}:{booth_id}", "VISITOR_LOOKUP")
     booth = _public_booth(booth_id)
+    guard_config(f"lookup:{request.remote_addr}:{booth_id}", "VISITOR_LOOKUP")
     name, code = _identity(json_body())
     r = _find(get_db(), booth_id, name, code)
     if r is None:
@@ -163,8 +165,8 @@ def lookup(booth_id):
 
 @bp.post("/booths/<int:booth_id>/cancel")
 def cancel(booth_id):
-    guard_config(f"lookup:{request.remote_addr}:{booth_id}", "VISITOR_LOOKUP")
     _public_booth(booth_id)
+    guard_config(f"lookup:{request.remote_addr}:{booth_id}", "VISITOR_LOOKUP")
     name, code = _identity(json_body())
     with tx() as db:
         r = _find(db, booth_id, name, code)
