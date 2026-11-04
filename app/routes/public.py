@@ -136,6 +136,7 @@ def reserve(booth_id):
         fields["slot"] = "선택할 수 없는 시간입니다."
     if fields:
         raise ValidationError(fields)
+    guard_config(f"reserve-name:{booth_id}:{name}", "VISITOR_RESERVE_NAME")
     with tx() as db:
         booth = _public_booth(booth_id)
         if not booth["is_active"]:
@@ -152,10 +153,15 @@ def reserve(booth_id):
     return jsonify(id=rid, slot=slot, status=status), 201
 
 
+def _guard_lookup(booth_id: int) -> None:
+    guard_config(f"lookup:{request.remote_addr}:{booth_id}", "VISITOR_LOOKUP")
+    guard_config(f"lookup-all:{request.remote_addr}", "VISITOR_LOOKUP_TOTAL")
+
+
 @bp.post("/booths/<int:booth_id>/lookup")
 def lookup(booth_id):
     booth = _public_booth(booth_id)
-    guard_config(f"lookup:{request.remote_addr}:{booth_id}", "VISITOR_LOOKUP")
+    _guard_lookup(booth_id)
     name, code = _identity(json_body())
     r = _find(get_db(), booth_id, name, code)
     if r is None:
@@ -166,7 +172,7 @@ def lookup(booth_id):
 @bp.post("/booths/<int:booth_id>/cancel")
 def cancel(booth_id):
     _public_booth(booth_id)
-    guard_config(f"lookup:{request.remote_addr}:{booth_id}", "VISITOR_LOOKUP")
+    _guard_lookup(booth_id)
     name, code = _identity(json_body())
     with tx() as db:
         r = _find(db, booth_id, name, code)

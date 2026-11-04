@@ -183,3 +183,54 @@ def test_positive_int_setting(monkeypatch, raw, expected):
     if raw is not None:
         monkeypatch.setenv("X_LIMIT", raw)
     assert _positive("X_LIMIT", 30) == expected
+
+
+def test_lookup_total_limit_spans_booths(app, client, make_org, make_event, make_booth):
+    app.config.update(VISITOR_LOOKUP_TOTAL_LIMIT=2)
+    ev = make_event(make_org())
+    a, b, c = make_booth(ev), make_booth(ev), make_booth(ev)
+    body = {"name": "x", "code": "0000"}
+    assert client.post(f"/api/public/booths/{a}/lookup", json=body).status_code == 404
+    assert client.post(f"/api/public/booths/{b}/cancel", json=body).status_code == 404
+    assert client.post(f"/api/public/booths/{c}/lookup", json=body).status_code == 429
+
+
+def test_lookup_total_default_is_loose(app):
+    assert app.config["VISITOR_LOOKUP_TOTAL_LIMIT"] == 10000
+    assert app.config["VISITOR_LOOKUP_TOTAL_WINDOW"] == 900
+
+
+def _reserve_as(client, booth, name, code, ip="10.0.0.1"):
+    return client.post(f"/api/public/booths/{booth}/reservations", environ_overrides={"REMOTE_ADDR": ip},
+                       json={"name": name, "gender": "남", "age_group": "9~13세", "code": code}).status_code
+
+
+def test_reserve_name_limit_ignores_ip(app, client, make_org, make_event, make_booth):
+    app.config.update(VISITOR_RESERVE_NAME_LIMIT=2)
+    b = make_booth(make_event(make_org()), mode="fcfs", total_limit=0)
+    assert _reserve_as(client, b, "홍길동", "0001", "10.0.0.1") == 201
+    assert _reserve_as(client, b, "홍길동", "0002", "10.0.0.2") == 201
+    assert _reserve_as(client, b, "홍길동", "0003", "10.0.0.3") == 429
+    assert _reserve_as(client, b, "김철수", "0001", "10.0.0.3") == 201
+
+
+def test_reserve_name_limit_is_per_booth(app, client, make_org, make_event, make_booth):
+    app.config.update(VISITOR_RESERVE_NAME_LIMIT=1)
+    ev = make_event(make_org())
+    a, b = make_booth(ev, mode="fcfs", total_limit=0), make_booth(ev, mode="fcfs", total_limit=0)
+    assert _reserve_as(client, a, "홍길동", "0001") == 201
+    assert _reserve_as(client, a, "홍길동", "0002") == 429
+    assert _reserve_as(client, b, "홍길동", "0003") == 201
+
+
+def test_reserve_name_limit_skips_invalid_input(app, client, db, make_org, make_event, make_booth):
+    app.config.update(VISITOR_RESERVE_NAME_LIMIT=1)
+    b = make_booth(make_event(make_org()), mode="fcfs", total_limit=0)
+    assert _reserve_as(client, b, "홍길동", "12") == 422
+    assert _reserve_as(client, b, "홍길동", "0001") == 201
+    assert db.execute("SELECT COUNT(*) FROM rate_events WHERE key LIKE 'reserve-name:%'").fetchone()[0] == 1
+
+
+def test_reserve_name_limit_default(app):
+    assert app.config["VISITOR_RESERVE_NAME_LIMIT"] == 20
+    assert app.config["VISITOR_RESERVE_NAME_WINDOW"] == 900

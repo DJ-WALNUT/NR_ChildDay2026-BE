@@ -34,7 +34,9 @@ python -m pytest -q
 | `TRUSTED_PROXY_HOPS` | `2` | 신뢰할 프록시 단수(Cloudflare 1 + 리버스 프록시 1). 직접 연결이면 `0` |
 | `CLEANUP_INTERVAL` | `600` | 오래된 보조 행 정리 주기(초) |
 | `VISITOR_RESERVE_LIMIT` / `VISITOR_RESERVE_WINDOW` | `30` / `60` | 신청 제한(횟수 / 초). 같은 IP·같은 부스 기준 |
+| `VISITOR_RESERVE_NAME_LIMIT` / `VISITOR_RESERVE_NAME_WINDOW` | `20` / `900` | 같은 부스·같은 이름의 신청 시도 제한(횟수 / 초). IP 와 상관없이 센다. 신청 응답으로 식별번호를 맞혀 보는 속도를 막는 값이라 크게 늘리지 않는다 |
 | `VISITOR_LOOKUP_LIMIT` / `VISITOR_LOOKUP_WINDOW` | `20` / `900` | 내 신청 조회·취소 제한(횟수 / 초, 공유). 같은 IP·같은 부스 기준. 식별번호 추측을 막는 값이라 크게 늘리지 않는다 |
+| `VISITOR_LOOKUP_TOTAL_LIMIT` / `VISITOR_LOOKUP_TOTAL_WINDOW` | `10000` / `900` | 조회·취소 IP 전체 상한(횟수 / 초). 부스를 가리지 않고 합산한다. 기본은 사실상 제한이 없는 값이고, 여러 부스를 도는 시도가 보이면 낮춘다(예: `200`) |
 | `LINK_MISS_LIMIT` / `LINK_MISS_WINDOW` | `30` / `900` | 잘못된 링크 제한(횟수 / 초). 같은 IP 기준 |
 
 제한 값이 0 이하이거나 숫자가 아니면 기본값을 쓴다. 바꾼 값은 앱을 다시 시작해야 적용된다. `*_WINDOW`는 86400(24시간) 이하로 쓴다. 제한 기록을 24시간 뒤 지우므로 그보다 긴 값은 효과가 없다.

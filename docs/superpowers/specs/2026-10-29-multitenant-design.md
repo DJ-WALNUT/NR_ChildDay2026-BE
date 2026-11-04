@@ -301,9 +301,11 @@ walnutphoto(`server/app/auth.py`, `security.py`, `ratelimit.py`)의 구현을 �
 | `login:{username}:{ip}` | 15분 10회 실패 |
 | `link-miss:{ip}` | 잘못된 링크 토큰 15분 30회 |
 | `lookup:{ip}:{booth_id}` | 방문객 조회·취소 부스별 15분 20회 |
+| `reserve-name:{booth_id}:{name}` | 같은 부스·같은 이름의 신청 시도 15분 20회(IP 무관, 입력 검증을 통과한 시도만 센다) |
+| `lookup-all:{ip}` | 방문객 조회·취소 IP 전체 15분 10000회(기본은 사실상 무제한) |
 | `reserve:{ip}:{booth_id}` | 신청 부스별 1분 30회 |
 
-`link-miss`·`lookup`·`reserve` 한도는 환경변수로 바꿀 수 있다(`README.md` 환경변수 절). `rate_events`는 24시간 지난 행을 주기적으로 정리한다.
+`link-miss`·`lookup`·`lookup-all`·`reserve`·`reserve-name` 한도는 환경변수로 바꿀 수 있다(`README.md` 환경변수 절). `rate_events`는 24시간 지난 행을 주기적으로 정리한다.
 
 ## 7. API
 
