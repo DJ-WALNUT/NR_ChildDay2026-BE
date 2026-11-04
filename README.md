@@ -33,6 +33,11 @@ python -m pytest -q
 | `SESSION_COOKIE_SECURE` | `1` | 세션 쿠키 Secure 속성. `0`이면 HTTP에서도 전송(로컬 개발용) |
 | `TRUSTED_PROXY_HOPS` | `2` | 신뢰할 프록시 단수(Cloudflare 1 + 리버스 프록시 1). 직접 연결이면 `0` |
 | `CLEANUP_INTERVAL` | `600` | 오래된 보조 행 정리 주기(초) |
+| `VISITOR_RESERVE_LIMIT` / `VISITOR_RESERVE_WINDOW` | `30` / `60` | 신청 제한(횟수 / 초). 같은 IP·같은 부스 기준 |
+| `VISITOR_LOOKUP_LIMIT` / `VISITOR_LOOKUP_WINDOW` | `20` / `900` | 내 신청 조회·취소 제한(횟수 / 초, 공유). 같은 IP·같은 부스 기준. 식별번호 추측을 막는 값이라 크게 늘리지 않는다 |
+| `LINK_MISS_LIMIT` / `LINK_MISS_WINDOW` | `30` / `900` | 잘못된 링크 제한(횟수 / 초). 같은 IP 기준 |
+
+제한 값이 0 이하이거나 숫자가 아니면 기본값을 쓴다. 바꾼 값은 앱을 다시 시작해야 적용된다.
 
 ## 슈퍼관리자 생성·복구
 

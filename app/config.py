@@ -18,6 +18,12 @@ def _int(name: str, default: int) -> int:
         return default
 
 
+def _positive(name: str, default: int) -> int:
+    """제한 값용. 0 이하는 모든 요청을 막게 되므로 기본값으로 둔다."""
+    value = _int(name, default)
+    return value if value > 0 else default
+
+
 class Config:
     DATA_DIR = os.getenv("DATA_DIR") or str(_ROOT / "data")
     CORS_ORIGINS = os.getenv(
@@ -28,4 +34,11 @@ class Config:
     # Cloudflare(1) + 리버스 프록시(1) = 2. 프록시 없이 직접 붙이면 0.
     TRUSTED_PROXY_HOPS = _int("TRUSTED_PROXY_HOPS", 2)
     CLEANUP_INTERVAL = _int("CLEANUP_INTERVAL", 600)  # 초
+    # 방문객 제한. IP+부스 단위(잘못된 링크만 IP 단위). LIMIT 은 횟수, WINDOW 는 초.
+    VISITOR_RESERVE_LIMIT = _positive("VISITOR_RESERVE_LIMIT", 30)
+    VISITOR_RESERVE_WINDOW = _positive("VISITOR_RESERVE_WINDOW", 60)
+    VISITOR_LOOKUP_LIMIT = _positive("VISITOR_LOOKUP_LIMIT", 20)
+    VISITOR_LOOKUP_WINDOW = _positive("VISITOR_LOOKUP_WINDOW", 900)
+    LINK_MISS_LIMIT = _positive("LINK_MISS_LIMIT", 30)
+    LINK_MISS_WINDOW = _positive("LINK_MISS_WINDOW", 900)
     TESTING = False

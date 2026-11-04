@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from flask import current_app
+
 from .db import get_db
 from .errors import ApiError
 from .timeutil import now
@@ -38,3 +40,8 @@ def guard(key: str, limit: int, window_sec: int) -> None:
     if exceeded(key, limit, window_sec):
         raise ApiError(429, "rate_limited")
     hit(key)
+
+
+def guard_config(key: str, name: str) -> None:
+    """설정의 <name>_LIMIT · <name>_WINDOW 로 guard 한다."""
+    guard(key, current_app.config[f"{name}_LIMIT"], current_app.config[f"{name}_WINDOW"])

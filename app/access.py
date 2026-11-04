@@ -11,7 +11,7 @@ from .auth import current_user
 from .db import get_db
 from .errors import ApiError, forbidden, not_found
 from .principal import Principal, current_principal, set_principal
-from .ratelimit import guard
+from .ratelimit import guard_config
 
 
 def require_org(org_id: int) -> sqlite3.Row:
@@ -98,7 +98,7 @@ def require_event(event_id: int) -> sqlite3.Row:
 
 
 def _link_miss() -> NoReturn:
-    guard(f"link-miss:{request.remote_addr}", 30, 900)
+    guard_config(f"link-miss:{request.remote_addr}", "LINK_MISS")
     raise ApiError(404, "not_found")
 
 

@@ -106,6 +106,16 @@ def create_event(org_id: int):
     return jsonify(event=_load_event(cur.lastrowid)), 201
 
 
+@bp.get("/events/<int:event_id>")
+@login_required
+def get_event(event_id: int):
+    ev = require_event(event_id)
+    org = get_db().execute("SELECT id, name, slug, logo FROM organizations WHERE id = ?",
+                           (ev["org_id"],)).fetchone()
+    return jsonify(event=_load_event(event_id),
+                   org={"id": org["id"], "name": org["name"], "slug": org["slug"], "logo_url": assets.url(org["logo"])})
+
+
 @bp.patch("/events/<int:event_id>")
 @login_required
 def update_event(event_id: int):

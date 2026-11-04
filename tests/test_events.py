@@ -67,3 +67,18 @@ def test_link_inactive_org_rejected(client, make_org, make_user, login_as, api):
     assert api(client, "POST", f"/api/admin/events/{ev}/partners", json={"name": "x", "linked_org_id": host}).status_code == 422
     ids = [o["id"] for o in api(client, "GET", f"/api/admin/orgs/{host}/link-targets").json["orgs"]]
     assert dead not in ids and host not in ids
+
+
+def test_get_event_with_owner_org(client, make_org, make_user, login_as, api, make_event, make_booth):
+    org = make_org("나름", "nareum"); ev = make_event(org, "어울마당"); make_booth(ev)
+    make_user("hong", org_id=org); login_as(client, "hong")
+    r = api(client, "GET", f"/api/admin/events/{ev}")
+    assert r.status_code == 200 and r.json["event"]["name"] == "어울마당" and r.json["event"]["booth_count"] == 1
+    assert r.json["org"] == {"id": org, "name": "나름", "slug": "nareum", "logo_url": None}
+
+
+def test_superadmin_opens_event_of_inactive_org(client, make_org, make_user, login_as, api, make_event):
+    org = make_org(active=False); ev = make_event(org)
+    make_user("root", superadmin=True); login_as(client, "root")
+    r = api(client, "GET", f"/api/admin/events/{ev}")
+    assert r.status_code == 200 and r.json["org"]["id"] == org

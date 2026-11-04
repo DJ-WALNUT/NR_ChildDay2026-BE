@@ -300,10 +300,10 @@ walnutphoto(`server/app/auth.py`, `security.py`, `ratelimit.py`)의 구현을 �
 |---|---|
 | `login:{username}:{ip}` | 15분 10회 실패 |
 | `link-miss:{ip}` | 잘못된 링크 토큰 15분 30회 |
-| `lookup:{ip}` | 방문객 조회·취소 15분 20회 |
-| `reserve:{ip}` | 신청 1분 30회 |
+| `lookup:{ip}:{booth_id}` | 방문객 조회·취소 부스별 15분 20회 |
+| `reserve:{ip}:{booth_id}` | 신청 부스별 1분 30회 |
 
-`rate_events`는 24시간 지난 행을 주기적으로 정리한다.
+`link-miss`·`lookup`·`reserve` 한도는 환경변수로 바꿀 수 있다(`README.md` 환경변수 절). `rate_events`는 24시간 지난 행을 주기적으로 정리한다.
 
 ## 7. API
 
@@ -341,7 +341,7 @@ walnutphoto(`server/app/auth.py`, `security.py`, `ratelimit.py`)의 구현을 �
 - 시간대별(`mode: "time"`): `{slots:[{label, remaining: int|null, full: bool}], is_closed: bool}` — 슬롯 라벨은 `11시 A타임`(시간당 1칸이면 `11시`)
 
 신청 오류: 이름·식별번호·성별·연령대 검증 실패와 목록에 없는 슬롯은 `422 invalid`, 중복 `409 duplicate`, 정원 `409 full`(대기 사용 시 `waiting`으로 접수), 마감 `409 closed`.
-`lookup`·`cancel`은 같은 IP 15분 20회 제한을 공유한다. 응답에 다른 신청자의 정보는 포함하지 않는다.
+`lookup`·`cancel`은 같은 IP·같은 부스 기준 15분 20회 제한을 공유한다. 응답에 다른 신청자의 정보는 포함하지 않는다.
 
 ### 7.2 인증 `/api/admin/auth`
 
@@ -361,6 +361,7 @@ CSRF: 로그인을 뺀 모든 변경 요청에 `X-CSRF-Token`(로그인·`me`가
 | POST | `/users/<id>/reset-password` | 같은 기관 → `{temp_password}`. 자기 자신은 `409 use_password_change` |
 | GET | `/orgs/<org>/overview` | require_org. 소유 행사 + 연결 운영 단체(행사·주최 기관 이름 포함)와 부스 요약, 오늘·전체 신청 수, 운영 중 부스 수 |
 | GET/POST | `/orgs/<org>/events` | require_org. GET `{events:[event]}`, POST 201 `{event}`. `event` = `{id, name, created_at, booth_count, partner_count, logo_url, notice}` |
+| GET | `/events/<id>` | require_event → `{event, org:{id,name,slug,logo_url}}`. 슈퍼관리자는 비활성 기관 행사도 열 수 있다 |
 | PATCH/DELETE | `/events/<id>` | require_event. PATCH `{name?, notice?}`(둘 다 없으면 422; `notice`는 앞뒤 공백 제거 후 0~500자 문자열 또는 null, 빈 값은 null로 저장) → `{event}`, DELETE 204 |
 | PUT | `/orgs/<org>/logo` | require_org. multipart `file`(PNG·JPEG·WebP, 시그니처로 판별, 1MB 이하; SVG 거부) → `{logo_url}`. 파일 없음·빈 파일·형식 오류 422, 초과 413 |
 | DELETE | `/orgs/<org>/logo` | require_org → 204 |
@@ -372,7 +373,7 @@ CSRF: 로그인을 뺀 모든 변경 요청에 `X-CSRF-Token`(로그인·`me`가
 | GET | `/orgs/<org>/link-targets` | 연결 기관 선택용 활성 기관 목록(자기 기관 제외) `{orgs:[{id, name}]}` |
 | GET/POST | `/events/<id>/booths` | require_event. GET `{booths:[booth]}`, POST 201 `{booth}` (`booth`는 아래 부스 객체) |
 | POST | `/events/<id>/booths/bulk` | require_event. `{rows:[...]}`(최대 500): 전부 검증 후 일괄 삽입 → 201 `{created:n}`, 하나라도 오류면 `422 {fields:{rows:{<index>:<message>}}}` |
-| GET/PATCH/DELETE | `/booths/<id>` | GET `{booth}`, PATCH `{booth}`(관리 항목은 manage, `event_id`·`partner_id` 변경과 DELETE는 own; 행사를 옮기면 운영 단체는 미배정), DELETE 204 |
+| GET/PATCH/DELETE | `/booths/<id>` | GET `{booth, org:{name,slug}}`(`org`는 부스를 소유한 기관), PATCH `{booth}`(관리 항목은 manage, `event_id`·`partner_id` 변경과 DELETE는 own; 행사를 옮기면 운영 단체는 미배정), DELETE 204 |
 | POST | `/booths/<id>/toggle` | manage → `{is_active}` (DB에서 원자적으로 뒤집은 값) |
 | POST | `/booths/batch-status` | `{booth_ids, is_active}` — 모든 부스에 own 필요, 하나라도 아니면 404로 아무것도 바꾸지 않음 → `{updated:n}`. 감사 기록은 부스 소유 기관마다 1건 |
 | POST | `/booths/<id>/rotate-token` | own → `{manage_token}` |

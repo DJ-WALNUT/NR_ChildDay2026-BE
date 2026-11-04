@@ -1,3 +1,7 @@
+import pytest
+
+from app.config import _positive
+
 def test_org_listing_hides_inactive(client, make_org, make_event, make_booth):
     org = make_org(slug="nareum"); ev = make_event(org, name="어울마당")
     make_booth(ev, name="열림"); make_booth(ev, name="닫힘", is_active=0); make_event(org, name="빈 행사")
@@ -99,3 +103,36 @@ def test_lookup_and_cancel_share_counter(client, make_org, make_event, make_boot
     codes = [client.post(f"/api/public/booths/{b}/{'lookup' if i % 2 else 'cancel'}", json=body).status_code
              for i in range(21)]
     assert codes[:20] == [404] * 20 and codes[20] == 429
+
+
+def test_limits_are_per_booth(client, make_org, make_event, make_booth):
+    ev = make_event(make_org())
+    a, b = make_booth(ev), make_booth(ev)
+    body = {"name": "x", "code": "0000"}
+    assert [client.post(f"/api/public/booths/{a}/lookup", json=body).status_code for _ in range(21)][20] == 429
+    assert client.post(f"/api/public/booths/{b}/lookup", json=body).status_code == 404
+    assert client.post(f"/api/public/booths/{b}/cancel", json=body).status_code == 404
+
+
+def test_reserve_limit_is_per_booth(client, make_org, make_event, make_booth):
+    ev = make_event(make_org())
+    a, b = make_booth(ev), make_booth(ev)
+    assert [client.post(f"/api/public/booths/{a}/reservations", json={}).status_code for _ in range(31)][30] == 429
+    assert client.post(f"/api/public/booths/{b}/reservations", json={}).status_code == 422
+
+
+def test_visitor_limits_come_from_config(app, client, make_org, make_event, make_booth):
+    app.config.update(VISITOR_LOOKUP_LIMIT=2, VISITOR_RESERVE_LIMIT=1, LINK_MISS_LIMIT=1)
+    b = make_booth(make_event(make_org()))
+    body = {"name": "x", "code": "0000"}
+    assert [client.post(f"/api/public/booths/{b}/lookup", json=body).status_code for _ in range(3)] == [404, 404, 429]
+    assert [client.post(f"/api/public/booths/{b}/reservations", json={}).status_code for _ in range(2)] == [422, 429]
+    assert [client.get("/api/link/booth/nope").status_code for _ in range(2)] == [404, 429]
+
+
+@pytest.mark.parametrize("raw, expected", [(None, 30), ("", 30), ("abc", 30), ("0", 30), ("-5", 30), ("120", 120)])
+def test_positive_int_setting(monkeypatch, raw, expected):
+    monkeypatch.delenv("X_LIMIT", raising=False)
+    if raw is not None:
+        monkeypatch.setenv("X_LIMIT", raw)
+    assert _positive("X_LIMIT", 30) == expected

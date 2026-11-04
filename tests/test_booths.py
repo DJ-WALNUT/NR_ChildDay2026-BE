@@ -167,3 +167,19 @@ def test_toggle_flips_atomically(client, db, make_org, make_user, login_as, api,
     assert db.execute("SELECT is_active FROM booths WHERE id=?", (b,)).fetchone()[0] == 1
     d = db.execute("SELECT detail FROM audit_log WHERE action='booth.toggle'").fetchone()[0]
     assert json.loads(d) == {"is_active": True}
+
+
+def test_get_booth_includes_owner_org(client, make_org, make_user, login_as, api, make_event, make_booth):
+    host = make_org("주최", "host")
+    ev = make_event(host)
+    make_user("root", superadmin=True); login_as(client, "root")
+    b = make_booth(ev)
+    r = api(client, "GET", f"/api/admin/booths/{b}")
+    assert r.status_code == 200 and r.json["booth"]["id"] == b
+    assert r.json["org"] == {"name": "주최", "slug": "host"}
+
+
+def test_superadmin_get_booth_of_inactive_org(client, make_org, make_user, login_as, api, make_event, make_booth):
+    org = make_org("쉬는 기관", "resting", active=False); b = make_booth(make_event(org))
+    make_user("root", superadmin=True); login_as(client, "root")
+    assert api(client, "GET", f"/api/admin/booths/{b}").json["org"]["slug"] == "resting"

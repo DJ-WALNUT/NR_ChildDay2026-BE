@@ -17,6 +17,7 @@ CASES = {
     "admin_booths.batch_status": (
         "POST", lambda i: "/api/admin/booths/batch-status",
         lambda i: {"booth_ids": [i["booth"]], "is_active": False}),
+    "admin_events.get_event": ("GET", lambda i: f"/api/admin/events/{i['event']}", None),
     "admin_events.update_event": (
         "PATCH", lambda i: f"/api/admin/events/{i['event']}", lambda i: {"name": "x"}),
     "admin_events.delete_event": ("DELETE", lambda i: f"/api/admin/events/{i['event']}", None),

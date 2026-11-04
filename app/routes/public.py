@@ -13,7 +13,7 @@ from ..booth_ops import AGE_GROUPS, GENDERS
 from ..capacity import availability, decide_status, occupancy
 from ..db import get_db, tx
 from ..errors import ApiError, ValidationError, conflict, not_found
-from ..ratelimit import guard
+from ..ratelimit import guard_config
 from ..timeutil import now
 from .common import json_body
 
@@ -118,7 +118,7 @@ def booth_home(booth_id):
 
 @bp.post("/booths/<int:booth_id>/reservations")
 def reserve(booth_id):
-    guard(f"reserve:{request.remote_addr}", 30, 60)
+    guard_config(f"reserve:{request.remote_addr}:{booth_id}", "VISITOR_RESERVE")
     body = json_body()
     fields: dict[str, str] = {}
     name = code = ""
@@ -152,7 +152,7 @@ def reserve(booth_id):
 
 @bp.post("/booths/<int:booth_id>/lookup")
 def lookup(booth_id):
-    guard(f"lookup:{request.remote_addr}", 20, 900)
+    guard_config(f"lookup:{request.remote_addr}:{booth_id}", "VISITOR_LOOKUP")
     booth = _public_booth(booth_id)
     name, code = _identity(json_body())
     r = _find(get_db(), booth_id, name, code)
@@ -163,7 +163,7 @@ def lookup(booth_id):
 
 @bp.post("/booths/<int:booth_id>/cancel")
 def cancel(booth_id):
-    guard(f"lookup:{request.remote_addr}", 20, 900)
+    guard_config(f"lookup:{request.remote_addr}:{booth_id}", "VISITOR_LOOKUP")
     _public_booth(booth_id)
     name, code = _identity(json_body())
     with tx() as db:

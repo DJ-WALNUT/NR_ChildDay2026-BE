@@ -115,7 +115,8 @@ def bulk_create(event_id: int):
 @bp.get("/booths/<int:booth_id>")
 @login_required
 def get_booth(booth_id: int):
-    return jsonify(booth=booth_json(require_booth(booth_id, "manage")))
+    booth = require_booth(booth_id, "manage")
+    return jsonify(booth=booth_json(booth), org={"name": booth["org_name"], "slug": booth["org_slug"]})
 
 
 @bp.patch("/booths/<int:booth_id>")
