@@ -33,6 +33,7 @@ python -m pytest -q
 | `SESSION_COOKIE_SECURE` | `1` | 세션 쿠키 Secure 속성. `0`이면 HTTP에서도 전송(로컬 개발용) |
 | `TRUSTED_PROXY_HOPS` | `2` | 신뢰할 프록시 단수(Cloudflare 1 + 리버스 프록시 1). 직접 연결이면 `0` |
 | `CLEANUP_INTERVAL` | `600` | 오래된 보조 행 정리 주기(초) |
+| `APP_PORT` | `5005` | gunicorn 포트. compose를 쓰면 `x-app-port` 값이 들어간다 |
 | `VISITOR_RESERVE_LIMIT` / `VISITOR_RESERVE_WINDOW` | `30` / `60` | 신청 제한(횟수 / 초). 같은 IP·같은 부스 기준 |
 | `VISITOR_RESERVE_NAME_LIMIT` / `VISITOR_RESERVE_NAME_WINDOW` | `20` / `900` | 같은 부스·같은 이름의 신청 시도 제한(횟수 / 초). IP 와 상관없이 센다. 신청 응답으로 식별번호를 맞혀 보는 속도를 막는 값이라 크게 늘리지 않는다 |
 | `VISITOR_LOOKUP_LIMIT` / `VISITOR_LOOKUP_WINDOW` | `20` / `900` | 내 신청 조회·취소 제한(횟수 / 초, 공유). 같은 IP·같은 부스 기준. 식별번호 추측을 막는 값이라 크게 늘리지 않는다 |
@@ -58,7 +59,9 @@ docker build -t nr-booth-be .
 docker run -d --name nr-booth-be --restart unless-stopped -p 5005:5005 -v /volume1/docker/nr-booth/data:/data nr-booth-be
 ```
 
-포트 5005, 워커 4개(`gunicorn.conf.py`). DB는 `/data` 볼륨에 저장되므로 컨테이너를 지우고 다시 만들어도 남는다.
+시놀로지 Container Manager에서는 저장소의 `docker-compose.yml`을 쓴다(프로젝트 > 생성, 프로젝트 경로는 이 폴더). `.env`를 같은 폴더에 올리고, `volumes` 왼쪽을 NAS의 실제 공유폴더로 맞춘다. 컨테이너가 시작되면 빈 `app.db`가 생겨 이관 스크립트가 거부하므로, 처음 옮길 때는 프로젝트를 시작하기 전에 이관을 끝낸다.
+
+기본 포트 5005, 워커 4개(`gunicorn.conf.py`). 포트는 환경변수 `APP_PORT`로 바꾸며, compose에서는 `docker-compose.yml` 맨 위의 `x-app-port` 한 곳만 고친다. DB는 `/data` 볼륨에 저장되므로 컨테이너를 지우고 다시 만들어도 남는다.
 
 ## 운영 전환 절차
 

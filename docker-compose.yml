@@ -1,0 +1,62 @@
+# 시놀로지 Container Manager > 프로젝트 > 생성 에서 이 파일을 사용한다.
+# 프로젝트 경로는 이 폴더(Dockerfile 이 있는 곳)로 지정한다.
+#
+# ⚠️ .env 파일이 이 폴더에 함께 있어야 한다(.gitignore 라 저장소에는 없다).
+#    .env.example 을 복사해 값을 확인한 뒤 File Station 으로 올린다.
+#
+# ⚠️ 기존 서비스에서 처음 옮길 때는 순서가 중요하다.
+#    컨테이너가 시작되면 앱이 /data/app.db 를 빈 DB 로 만들고, 이관 스크립트는 이미 있는
+#    파일이면 거부한다. 그래서 이 프로젝트를 시작하기 전에 이관을 끝낸다.
+#    절차는 README.md 의 '운영 전환 절차' 참고. 먼저 시작해 버렸다면 프로젝트를 중지하고
+#    볼륨의 app.db, app.db-wal, app.db-shm 을 지운 뒤 이관한다(신청이 들어오기 전에만).
+#    기존 컨테이너가 같은 포트를 쓰고 있으면 먼저 멈춘다.
+#
+# ⚠️ 데이터 보존
+# 코드를 고쳐 '프로젝트 중지 → 삭제 → 재빌드' 를 해도 아래 volumes 경로의 DB 와 로고는 남는다.
+# 컨테이너 시작 로그에서 확인:
+#   INFO DB 위치: /data/app.db / 스키마 버전: N
+#
+# 슈퍼관리자 만들기:
+#   docker exec -it nr-booth-be flask create-superadmin --username <아이디>
+
+# 포트는 여기 한 곳에서만 바꾼다. 앱, 포트 매핑, 상태 확인이 모두 이 값을 따른다.
+# 바꾸면 DSM 역방향 프록시의 대상 포트도 같은 숫자로 맞춘다.
+x-app-port: &app-port 5005
+
+services:
+  nr-booth-be:
+    build: .
+    image: nr-booth-be:latest
+    container_name: nr-booth-be
+    restart: unless-stopped
+    env_file:
+      # CORS_ORIGINS, TRUSTED_PROXY_HOPS, 방문객 제한 값 등 운영값.
+      - .env
+    environment:
+      # env_file 보다 environment 가 우선한다. .env 의 DATA_DIR(./data)이 컨테이너 안쪽을
+      # 가리키면 재빌드 때 DB 가 사라지므로 여기서 볼륨 경로로 고정한다.
+      TZ: Asia/Seoul
+      DATA_DIR: /data
+      APP_PORT: *app-port
+    ports:
+      # DSM 역방향 프록시가 이 포트로 넘겨준다.
+      - target: *app-port
+        published: *app-port
+    volumes:
+      # 왼쪽을 NAS 의 실제 공유폴더 절대경로로 바꾼다. 프로젝트 폴더 안(./data)에 두면
+      # 프로젝트를 지울 때 함께 사라질 수 있으므로 프로젝트 밖의 독립된 폴더를 쓴다.
+      # app.db 와 업로드한 로고(assets/)가 여기 있다.
+      - /volume1/docker/nr-booth/data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:' + os.environ['APP_PORT'] + '/api/health', timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # 시작할 때 DB 마이그레이션이 돌므로 조금 여유를 준다.
+      start_period: 15s
+    logging:
+      # 접속 로그가 쌓인다. NAS 디스크를 채우지 않도록 제한한다.
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
