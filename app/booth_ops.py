@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from typing import Literal, Mapping
@@ -125,7 +126,6 @@ def toggle(p: Principal, booth: sqlite3.Row) -> bool:
     return bool(new)
 
 
-AGE_GROUPS = ("0~8세", "9~13세", "14~16세", "17~19세", "20~24세", "24세 이상")
 GENDERS = ("남", "여")
 STATUSES = ("normal", "waiting", "noshow", "completed")
 MAX_BOOTHS = 500
@@ -210,7 +210,18 @@ def partner_booth_ids(partner_id: int) -> list[int]:
     return [r["id"] for r in rows]
 
 
-def stats(booth_ids: list[int], mode: Literal["simple", "strict"]) -> dict:
+def _age_setting(booth_ids: list[int], event_id: int | None) -> tuple[str, list[str]]:
+    """부스들이 속한 행사(부스가 없으면 event_id)의 항목 이름과 선택지. 여러 행사가 섞이면 선택지를 합친다."""
+    marks = ",".join("?" for _ in booth_ids)
+    rows = get_db().execute(
+        f"SELECT age_label, age_options FROM events WHERE id IN"
+        f" (SELECT event_id FROM booths WHERE id IN ({marks})) OR id = ? ORDER BY id", (*booth_ids, event_id)).fetchall()
+    labels = {r["age_label"] for r in rows}
+    options = dict.fromkeys(o for r in rows for o in json.loads(r["age_options"]))
+    return (labels.pop() if len(labels) == 1 else "연령대"), list(options)
+
+
+def stats(booth_ids: list[int], mode: Literal["simple", "strict"], event_id: int | None = None) -> dict:
     marks = ",".join("?" for _ in booth_ids)
     rows = get_db().execute(
         f"SELECT name, gender, age_group FROM reservations "
@@ -218,16 +229,18 @@ def stats(booth_ids: list[int], mode: Literal["simple", "strict"]) -> dict:
     people = [tuple(r) for r in rows]
     if mode == "strict":
         people = list(set(people))
-    table = {a: {"age_group": a, "male": 0, "female": 0, "total": 0} for a in AGE_GROUPS}
+    # 목록에서 빠진 선택지의 신청도 실적에서 사라지지 않게 뒤에 따로 행을 둔다(removed).
+    label, options = _age_setting(booth_ids, event_id)
+    table = {a: {"age_group": a, "male": 0, "female": 0, "total": 0, "removed": False} for a in options}
+    for a in sorted({age for _n, _g, age in people} - set(options)):
+        table[a] = {"age_group": a, "male": 0, "female": 0, "total": 0, "removed": True}
     for _name, gender, age in people:
-        row = table.get(age)
-        if row is None or gender not in GENDERS:
-            continue
+        row = table[age]
         row["male" if gender == "남" else "female"] += 1
         row["total"] += 1
     out = list(table.values())
     male, female = sum(r["male"] for r in out), sum(r["female"] for r in out)
-    return {"rows": out, "male": male, "female": female, "total": male + female}
+    return {"age_label": label, "rows": out, "male": male, "female": female, "total": male + female}
 
 
 def export(p: Principal, booth_ids: list[int]) -> dict:

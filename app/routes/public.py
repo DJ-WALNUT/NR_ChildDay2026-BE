@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 from flask import Blueprint, Response, jsonify, request
@@ -9,7 +10,7 @@ from flask import Blueprint, Response, jsonify, request
 from .. import assets
 
 from ..access import load_booth
-from ..booth_ops import AGE_GROUPS, GENDERS
+from ..booth_ops import GENDERS
 from ..capacity import availability, decide_status, occupancy
 from ..db import get_db, tx
 from ..errors import ApiError, ValidationError, conflict, not_found
@@ -105,7 +106,9 @@ def booth_page(slug, booth_id):
         org={"name": booth["org_name"], "slug": booth["org_slug"],
              "logo_url": assets.url(booth["org_logo"])},
         event={"id": booth["event_id"], "name": booth["event_name"],
-               "logo_url": assets.url(booth["event_logo"]), "notice": booth["event_notice"]},
+               "logo_url": assets.url(booth["event_logo"]), "notice": booth["event_notice"],
+               "age_label": booth["event_age_label"],
+               "age_options": json.loads(booth["event_age_options"])},
         booth={"id": booth["id"], "name": booth["name"], "mode": booth["mode"],
                "use_waitlist": bool(booth["use_waitlist"]), "is_active": bool(booth["is_active"])},
         availability=availability(booth, occupancy(get_db(), booth_id)))
@@ -118,7 +121,7 @@ def booth_home(booth_id):
 
 @bp.post("/booths/<int:booth_id>/reservations")
 def reserve(booth_id):
-    _public_booth(booth_id)  # 없는 부스는 rate_events 행을 만들지 않는다
+    booth = _public_booth(booth_id)  # 없는 부스는 rate_events 행을 만들지 않는다
     guard_config(f"reserve:{request.remote_addr}:{booth_id}", "VISITOR_RESERVE")
     body = json_body()
     fields: dict[str, str] = {}
@@ -129,8 +132,8 @@ def reserve(booth_id):
         fields.update(e.fields)
     if body.get("gender") not in GENDERS:
         fields["gender"] = "성별을 선택해 주세요."
-    if body.get("age_group") not in AGE_GROUPS:
-        fields["age_group"] = "연령대를 선택해 주세요."
+    if body.get("age_group") not in json.loads(booth["event_age_options"]):
+        fields["age_group"] = f"{booth['event_age_label']} 항목을 선택해 주세요."
     slot = body.get("slot")
     if slot is not None and not isinstance(slot, str):
         fields["slot"] = "선택할 수 없는 시간입니다."

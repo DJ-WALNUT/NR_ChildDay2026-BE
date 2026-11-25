@@ -126,10 +126,10 @@ def partner_get(token):
 
 @bp.post("/partner/<token>/stats")
 def partner_stats(token):
-    p, _ = resolve_partner_link(token)
+    p, partner = resolve_partner_link(token)
     body = json_body()
     mode = parse_stats_mode(body)
-    return jsonify(stats(_scoped_ids(p, body), mode))
+    return jsonify(stats(_scoped_ids(p, body), mode, partner["event_id"]))
 
 
 @bp.post("/partner/<token>/export")

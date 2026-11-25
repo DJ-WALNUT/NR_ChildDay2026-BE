@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from flask import Blueprint, jsonify
@@ -20,7 +21,7 @@ from .common import json_body
 bp = Blueprint("admin_events", __name__, url_prefix="/api/admin")
 
 _EVENT_SQL = (
-    "SELECT e.id, e.name, e.created_at, e.logo, e.notice,"
+    "SELECT e.id, e.name, e.created_at, e.logo, e.notice, e.age_label, e.age_options,"
     " (SELECT COUNT(*) FROM booths b WHERE b.event_id = e.id) AS booth_count,"
     " (SELECT COUNT(*) FROM partners p WHERE p.event_id = e.id) AS partner_count"
     " FROM events e")
@@ -33,7 +34,8 @@ _PARTNER_SQL = (
 def _event_out(r: sqlite3.Row) -> dict:
     return {"id": r["id"], "name": r["name"], "created_at": r["created_at"],
             "booth_count": r["booth_count"], "partner_count": r["partner_count"],
-            "logo_url": assets.url(r["logo"]), "notice": r["notice"]}
+            "logo_url": assets.url(r["logo"]), "notice": r["notice"],
+            "age_label": r["age_label"], "age_options": json.loads(r["age_options"])}
 
 
 def _partner_out(r: sqlite3.Row) -> dict:
@@ -63,6 +65,33 @@ def _notice(v) -> str | None:
     if not isinstance(v, str) or len(v.strip()) > 500:
         raise ValidationError({"notice": "안내 문구는 500자 이하 문자열이어야 합니다."})
     return v.strip() or None
+
+
+def _age_text(v, max_len: int) -> str | None:
+    """앞뒤 공백을 뺀 한 줄 문자열. 규칙에 안 맞으면 None."""
+    v = v.strip() if isinstance(v, str) else ""
+    return v if 1 <= len(v) <= max_len and v.isprintable() else None
+
+
+def _age_label(v) -> str:
+    out = _age_text(v, 20)
+    if out is None:
+        raise ValidationError({"age_label": "1~20자로 입력하세요."})
+    return out
+
+
+def _age_options(v) -> list[str]:
+    if not isinstance(v, list) or not 1 <= len(v) <= 30:
+        raise ValidationError({"age_options": "선택지는 1~30개여야 합니다."})
+    out = [_age_text(o, 30) for o in v]
+    if None in out:
+        raise ValidationError({"age_options": "선택지는 1~30자로 입력하세요."})
+    if len(set(out)) != len(out):
+        raise ValidationError({"age_options": "같은 선택지가 두 번 들어 있습니다."})
+    return out
+
+
+_EVENT_FIELDS = {"name": _name, "notice": _notice, "age_label": _age_label, "age_options": _age_options}
 
 
 def _linked_org(v, owner_org_id: int) -> int | None:
@@ -121,32 +150,27 @@ def get_event(event_id: int):
 def update_event(event_id: int):
     ev = require_event(event_id)
     body = json_body()
-    if "name" not in body and "notice" not in body:
-        raise ValidationError({"name": "name 또는 notice 중 하나는 필요합니다."})
+    if not any(k in body for k in _EVENT_FIELDS):
+        raise ValidationError({"name": f"{', '.join(_EVENT_FIELDS)} 중 하나는 필요합니다."})
     fields: dict[str, str] = {}
-    name, notice = ev["name"], ev["notice"]
-    if "name" in body:
-        try:
-            name = _name(body["name"])
-        except ValidationError as e:
-            fields.update(e.fields)
-    if "notice" in body:
-        try:
-            notice = _notice(body["notice"])
-        except ValidationError as e:
-            fields.update(e.fields)
+    clean: dict = {}
+    for key, check in _EVENT_FIELDS.items():
+        if key in body:
+            try:
+                clean[key] = check(body[key])
+            except ValidationError as e:
+                fields.update(e.fields)
     if fields:
         raise ValidationError(fields)
-    detail = {}
-    if name != ev["name"]:
-        detail["name"] = {"from": ev["name"], "to": name}
-    if notice != ev["notice"]:
-        detail["notice"] = {"from": ev["notice"], "to": notice}
-    with tx() as conn:
-        conn.execute("UPDATE events SET name = ?, notice = ? WHERE id = ?", (name, notice, event_id))
-        if detail:
+    before = {**dict(ev), "age_options": json.loads(ev["age_options"])}
+    detail = {k: {"from": before[k], "to": v} for k, v in clean.items() if before[k] != v}
+    if detail:
+        values = [json.dumps(d["to"]) if k == "age_options" else d["to"] for k, d in detail.items()]
+        with tx() as conn:
+            conn.execute(f"UPDATE events SET {', '.join(f'{k} = ?' for k in detail)} WHERE id = ?",
+                         (*values, event_id))
             audit(current_principal(), "event.update", f"event:{event_id}",
-                  f"행사 수정: {name}", org_id=ev["org_id"], detail=detail)
+                  f"행사 수정: {clean.get('name', ev['name'])}", org_id=ev["org_id"], detail=detail)
     return jsonify(event=_load_event(event_id))
 
 

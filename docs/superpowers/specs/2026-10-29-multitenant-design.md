@@ -330,7 +330,7 @@ walnutphoto(`server/app/auth.py`, `security.py`, `ratelimit.py`)의 구현을 �
 | 메서드 | 경로 | 설명 |
 |---|---|---|
 | GET | `/orgs/<slug>` | `{org:{name,slug,logo_url}, events:[{id,name,logo_url,notice,booths:[{id,name,mode,is_closed}]}]}` — 운영 중 부스가 있는 행사만 |
-| GET | `/orgs/<slug>/booths/<id>` | `{org:{name,slug,logo_url}, event:{id,name,logo_url,notice}, booth:{id,name,mode,use_waitlist,is_active}, availability}`. 기관 불일치·비활성 기관 404. `availability`는 모드별 두 가지(아래) |
+| GET | `/orgs/<slug>/booths/<id>` | `{org:{name,slug,logo_url}, event:{id,name,logo_url,notice,age_label,age_options}, booth:{id,name,mode,use_waitlist,is_active}, availability}`. 기관 불일치·비활성 기관 404. `availability`는 모드별 두 가지(아래) |
 | POST | `/booths/<id>/reservations` | `{name, gender, age_group, code, slot?}` → `{id, slot, status}` |
 | POST | `/booths/<id>/lookup` | `{name, code}` → `{name, slot, status, booth_name}` 또는 404 |
 | POST | `/booths/<id>/cancel` | `{name, code}` → 204. `noshow`·`completed`는 409 |
@@ -362,9 +362,9 @@ CSRF: 로그인을 뺀 모든 변경 요청에 `X-CSRF-Token`(로그인·`me`가
 | PATCH | `/users/<id>` | 같은 기관. `{display_name?, is_active?}` → `{user}`. 자기 자신 비활성화 `cannot_deactivate_self`, 마지막 활성 계정 `last_active_user`(409) |
 | POST | `/users/<id>/reset-password` | 같은 기관 → `{temp_password}`. 자기 자신은 `409 use_password_change` |
 | GET | `/orgs/<org>/overview` | require_org. 소유 행사 + 연결 운영 단체(행사·주최 기관 이름 포함)와 부스 요약, 오늘·전체 신청 수, 운영 중 부스 수 |
-| GET/POST | `/orgs/<org>/events` | require_org. GET `{events:[event]}`, POST 201 `{event}`. `event` = `{id, name, created_at, booth_count, partner_count, logo_url, notice}` |
+| GET/POST | `/orgs/<org>/events` | require_org. GET `{events:[event]}`, POST 201 `{event}`. `event` = `{id, name, created_at, booth_count, partner_count, logo_url, notice, age_label, age_options}` |
 | GET | `/events/<id>` | require_event → `{event, org:{id,name,slug,logo_url}}`. 슈퍼관리자는 비활성 기관 행사도 열 수 있다 |
-| PATCH/DELETE | `/events/<id>` | require_event. PATCH `{name?, notice?}`(둘 다 없으면 422; `notice`는 앞뒤 공백 제거 후 0~500자 문자열 또는 null, 빈 값은 null로 저장) → `{event}`, DELETE 204 |
+| PATCH/DELETE | `/events/<id>` | require_event. PATCH `{name?, notice?, age_label?, age_options?}`(모두 없으면 422; `notice`는 앞뒤 공백 제거 후 0~500자 문자열 또는 null, 빈 값은 null로 저장; `age_label` 1~20자, `age_options` 1~30자 문자열 1~30개·중복 불가. 이미 받은 신청 값은 그대로 두고, 목록에서 빠진 값은 통계에 `removed: true` 행으로 나온다) → `{event}`, DELETE 204 |
 | PUT | `/orgs/<org>/logo` | require_org. multipart `file`(PNG·JPEG·WebP, 시그니처로 판별, 1MB 이하; SVG 거부) → `{logo_url}`. 파일 없음·빈 파일·형식 오류 422, 초과 413 |
 | DELETE | `/orgs/<org>/logo` | require_org → 204 |
 | PUT | `/events/<id>/logo` | require_event. 위와 같음 → `{logo_url}` |
@@ -382,7 +382,7 @@ CSRF: 로그인을 뺀 모든 변경 요청에 `X-CSRF-Token`(로그인·`me`가
 | GET | `/booths/<id>/reservations` | manage → `{reservations:[reservation]}` (슬롯 시각순) |
 | PATCH/DELETE | `/reservations/<id>` | 소속 부스 manage. PATCH `{status}`(`normal|waiting|noshow|completed`) → `{reservation, over_capacity?}`, DELETE 204 |
 | DELETE | `/booths/<id>/reservations` | manage (초기화) → `{deleted:n}` |
-| POST | `/stats` | `{booth_ids(1~500), mode: simple|strict}` — 모든 부스에 manage 필요 → `{rows:[{age_group,male,female,total}], male, female, total}` (`noshow` 제외, strict는 (이름,성별,연령대) 중복 제거) |
+| POST | `/stats` | `{booth_ids(1~500), mode: simple|strict}` — 모든 부스에 manage 필요 → `{age_label, rows:[{age_group,male,female,total,removed}], male, female, total}` (`noshow` 제외, strict는 (이름,성별,연령대) 중복 제거) |
 | POST | `/export` | `{booth_ids(1~500)}` → `{booths:[{booth_id, event_name, booth_name, rows:[{name,gender,age_group,code,slot,status,created_at}]}]}`. 감사 기록은 **부스 소유 기관마다 1건**(그 기관 부스 id만 `detail.booth_ids`에 담김) |
 | GET | `/orgs/<org>/audit` | require_org. `?before=<id>&limit=50(최대 200)&action=<접두사>` → `{items:[{id, org_id, actor_org_id, user_id, actor, actor_label, action, target, summary, detail, at}], next_before}` 최신순. 대상 기관이거나 행위자 기관인 행이 보인다 |
 
